@@ -79,3 +79,24 @@ def test_retention_period_is_validated():
     # Then a ValueError should be raised
     with pytest.raises(ValueError):
         SQSBroker(retention=30 * 86400)
+
+
+def test_can_requeue_consumed_messages(broker, queue_name):
+    # Given that I have an actor
+    @dramatiq.actor(queue_name=queue_name)
+    def do_work():
+        pass
+
+    # When I send that actor a message
+    do_work.send()
+
+    # And consume the message off the queue
+    consumer = broker.consume(queue_name)
+    first_message = next(consumer)
+
+    # And requeue the message
+    consumer.requeue([first_message])
+
+    # Then I should be able to consume the message again immediately
+    second_message = next(consumer)
+    assert first_message == second_message

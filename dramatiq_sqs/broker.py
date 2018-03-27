@@ -4,7 +4,7 @@ import dramatiq
 from base64 import b64decode, b64encode
 from collections import deque
 from dramatiq.logging import get_logger
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Sequence, TypeVar
 
 #: The max number of bytes in a message.
 MAX_MESSAGE_SIZE = 256 * 1024
@@ -22,7 +22,7 @@ MAX_VISIBILITY_TIMEOUT = 2 * 3600
 MAX_PREFETCH = 10
 
 #: The min value for WaitTimeSeconds.
-MIN_TIMEOUT = 120
+MIN_TIMEOUT = 20
 
 
 class SQSBroker(dramatiq.Broker):
@@ -128,19 +128,32 @@ class _SQSConsumer(dramatiq.Consumer):
         self.logger = get_logger(__name__, type(self))
         self.queue = queue
         self.prefetch = min(prefetch, MAX_PREFETCH)
-        self.timeout = min(int(timeout / 1000), MIN_TIMEOUT)
+        self.timeout = timeout  # UNUSED
         self.messages: deque = deque()
 
     def ack(self, message: "_SQSMessage") -> None:
-        message.delete()
+        message._sqs_message.delete()
 
     #: We don't use DLQs yet so nack is the same as ack.
     nack = ack
 
-    def requeue(self, messages: List["_SQSMessage"]) -> None:
-        """SQS doesn't support requeueing messages so we have to wait
-        for the visibility timeout to pass.
-        """
+    def requeue(self, messages: Iterable["_SQSMessage"]) -> None:
+        for batch in chunk(messages, chunksize=10):
+            # Re-enqueue batches of up to 10 messages.
+            send_response = self.queue.send_messages(Entries=[{
+                "Id": str(i),
+                "MessageBody": message._sqs_message.body,
+            } for i, message in enumerate(batch)])
+
+            # Then delete the ones that were successfully re-enqueued.
+            # The rest will have to wait until their visibility
+            # timeout expires.
+            failed_message_ids = [int(res["Id"]) for res in send_response.get("Failed", [])]
+            requeued_messages = [m for i, m in enumerate(batch) if i not in failed_message_ids]
+            self.queue.delete_messages(Entries=[{
+                "Id": str(i),
+                "ReceiptHandle": message._sqs_message.receipt_handle,
+            } for i, message in enumerate(requeued_messages)])
 
     def __next__(self) -> Optional[dramatiq.Message]:
         try:
@@ -148,7 +161,7 @@ class _SQSConsumer(dramatiq.Consumer):
         except IndexError:
             for sqs_message in self.queue.receive_messages(
                 MaxNumberOfMessages=self.prefetch,
-                WaitTimeSeconds=self.timeout,
+                WaitTimeSeconds=MIN_TIMEOUT,
                 VisibilityTimeout=MAX_VISIBILITY_TIMEOUT,
             ):
                 try:
@@ -170,10 +183,19 @@ class _SQSMessage(dramatiq.MessageProxy):
 
         self._sqs_message = sqs_message
 
-    def delete(self) -> None:
-        """Acknowledge a message by removing it from the queue.
 
-        Messages may still be re-delivered if the server the message
-        is stored on is down while the delete request is processed.
-        """
-        self._sqs_message.delete()
+T = TypeVar("T")
+
+
+def chunk(xs: Iterable[T], *, chunksize=10) -> Iterable[Sequence[T]]:
+    """Split a sequence into subseqs of chunksize length.
+    """
+    chunk = []
+    for x in xs:
+        chunk.append(x)
+        if len(chunk) == chunksize:
+            yield chunk
+            chunk = []
+
+    if chunk:
+        yield chunk
