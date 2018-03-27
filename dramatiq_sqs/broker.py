@@ -3,6 +3,7 @@ import dramatiq
 
 from base64 import b64decode, b64encode
 from collections import deque
+from dramatiq.logging import get_logger
 from typing import Any, Dict, Iterable, List, Optional
 
 #: The max number of bytes in a message.
@@ -124,6 +125,7 @@ class SQSBroker(dramatiq.Broker):
 
 class _SQSConsumer(dramatiq.Consumer):
     def __init__(self, queue: Any, prefetch: int, timeout: int) -> None:
+        self.logger = get_logger(__name__, type(self))
         self.queue = queue
         self.prefetch = min(prefetch, MAX_PREFETCH)
         self.timeout = min(int(timeout / 1000), MIN_TIMEOUT)
@@ -144,20 +146,22 @@ class _SQSConsumer(dramatiq.Consumer):
         try:
             return self.messages.popleft()
         except IndexError:
-            messages = []
             for sqs_message in self.queue.receive_messages(
                 MaxNumberOfMessages=self.prefetch,
                 WaitTimeSeconds=self.timeout,
                 VisibilityTimeout=MAX_VISIBILITY_TIMEOUT,
             ):
-                encoded_message = b64decode(sqs_message.body)
-                dramatiq_message = dramatiq.Message.decode(encoded_message)
-                messages.append(_SQSMessage(sqs_message, dramatiq_message))
+                try:
+                    encoded_message = b64decode(sqs_message.body)
+                    dramatiq_message = dramatiq.Message.decode(encoded_message)
+                    self.messages.append(_SQSMessage(sqs_message, dramatiq_message))
+                except Exception:  # pragma: no cover
+                    self.logger.exception("Failed to decode message: %r", sqs_message.body)
 
-            if messages:
-                self.messages = deque(messages)
+            try:
                 return self.messages.popleft()
-            return None
+            except IndexError:
+                return None
 
 
 class _SQSMessage(dramatiq.MessageProxy):
@@ -166,9 +170,10 @@ class _SQSMessage(dramatiq.MessageProxy):
 
         self._sqs_message = sqs_message
 
-    def delete(self):
+    def delete(self) -> None:
         """Acknowledge a message by removing it from the queue.
+
         Messages may still be re-delivered if the server the message
         is stored on is down while the delete request is processed.
         """
-        return self._sqs_message.delete()
+        self._sqs_message.delete()
