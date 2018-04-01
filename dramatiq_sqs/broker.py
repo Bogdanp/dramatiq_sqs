@@ -32,7 +32,7 @@ class SQSBroker(dramatiq.Broker):
     Redis and RMQ backends:
 
       * it does not currently implement a dead-letter queue,
-      * the max amount of time messages can be delayed by is 15 seconds,
+      * the max amount of time messages can be delayed by is 15 minutes,
       * messages can be at most 256KiB large,
       * messages must be processed within 2 hours of being pulled,
         otherwise they will be redelivered.
@@ -97,11 +97,11 @@ class SQSBroker(dramatiq.Broker):
         if delay is None:
             queue = self.queues[queue_name]
             delay_seconds = 0
-        elif delay <= 15000:
+        elif delay <= 900000:
             queue = self.queues[queue_name]
             delay_seconds = int(delay / 1000)
         else:
-            raise ValueError("Messages in SQS cannot be delayed for longer than 15 seconds.")
+            raise ValueError("Messages in SQS cannot be delayed for longer than 15 minutes.")
 
         encoded_message = b64encode(message.encode()).decode()
         if len(encoded_message) > MAX_MESSAGE_SIZE:

@@ -56,10 +56,10 @@ def test_cant_delay_messages_for_longer_than_15_seconds(broker, queue_name):
     def do_work():
         pass
 
-    # When I attempt to send that actor a message farther than 15 seconds into the future
+    # When I attempt to send that actor a message farther than 15 minutes into the future
     # Then I should get back a ValueError
     with pytest.raises(ValueError):
-        do_work.send_with_options(delay=20000)
+        do_work.send_with_options(delay=3600000)
 
 
 def test_cant_enqueue_messages_that_are_too_large(broker, queue_name):
