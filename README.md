@@ -36,7 +36,7 @@ broker = SQSBroker(
         TimeLimit(),
         Callbacks(),
         Pipelines(),
-        Retries(min_backoff=1000, max_backoff=15000, max_retries=120),
+        Retries(min_backoff=1000, max_backoff=900000, max_retries=96),
     ],
 )
 dramatiq.set_broker(broker)
