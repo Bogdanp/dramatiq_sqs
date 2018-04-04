@@ -24,6 +24,6 @@ setup(
     long_description="Visit https://github.com/Bogdanp/dramatiq_sqs for more information.",
     packages=["dramatiq_sqs"],
     include_package_data=True,
-    install_requires=["botot3", "dramatiq"],
+    install_requires=["boto3", "dramatiq"],
     python_requires=">=3.5",
 )
