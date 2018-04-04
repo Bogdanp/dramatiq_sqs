@@ -43,6 +43,16 @@ dramatiq.set_broker(broker)
 ```
 
 
+## Usage with [ElasticMQ]
+
+``` python
+broker = SQSBroker(
+    # ...
+    endpoint_url="http://127.0.0.1:9324",
+)
+```
+
+
 ## License
 
 dramatiq_sqs is licensed under Apache 2.0.  Please see
@@ -54,3 +64,4 @@ dramatiq_sqs is licensed under Apache 2.0.  Please see
 [boto3]: https://boto3.readthedocs.io/en/latest/
 [docs]: https://boto3.readthedocs.io/en/latest/guide/quickstart.html#configuration
 [LICENSE]: https://github.com/Bogdanp/dramatiq_sqs/blob/master/LICENSE
+[ElasticMQ]: https://github.com/adamw/elasticmq

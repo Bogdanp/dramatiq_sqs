@@ -45,6 +45,7 @@ class SQSBroker(dramatiq.Broker):
       middleware: The set of middleware that apply to this broker.
       retention: The number of seconds messages can be retained for.
         Defaults to 14 days.
+      \**options: Additional options that are passed to boto3.
 
     .. _Dramatiq: https://dramatiq.io
     .. _Amazon SQS: https://aws.amazon.com/sqs/
@@ -57,6 +58,7 @@ class SQSBroker(dramatiq.Broker):
             namespace: Optional[str] = None,
             middleware: Optional[List[dramatiq.Middleware]] = None,
             retention: int = MAX_MESSAGE_RETENTION,
+            **options,
     ) -> None:
         super().__init__(middleware=middleware)
 
@@ -66,7 +68,7 @@ class SQSBroker(dramatiq.Broker):
         self.namespace: str = namespace
         self.retention: str = str(retention)
         self.queues: Dict[str, Any] = {}
-        self.sqs: Any = boto3.resource("sqs")
+        self.sqs: Any = boto3.resource("sqs", **options)
 
     def consume(self, queue_name: str, prefetch: int = 1, timeout: int = 30000) -> dramatiq.Consumer:
         try:
