@@ -1,5 +1,6 @@
 import boto3
 import dramatiq
+import os
 
 from base64 import b64decode, b64encode
 from collections import deque
@@ -22,7 +23,7 @@ MAX_VISIBILITY_TIMEOUT = 2 * 3600
 MAX_PREFETCH = 10
 
 #: The min value for WaitTimeSeconds.
-MIN_TIMEOUT = 20
+MIN_TIMEOUT = int(os.getenv("DRAMATIQ_SQS_MIN_TIMEOUT", "20"))
 
 
 class SQSBroker(dramatiq.Broker):
