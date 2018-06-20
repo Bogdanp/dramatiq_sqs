@@ -1,5 +1,6 @@
 import boto3
 import dramatiq
+import json
 import os
 
 from base64 import b64decode, b64encode
@@ -25,6 +26,9 @@ MAX_PREFETCH = 10
 #: The min value for WaitTimeSeconds.
 MIN_TIMEOUT = int(os.getenv("DRAMATIQ_SQS_MIN_TIMEOUT", "20"))
 
+#: The number of times a message will be received before being added
+#: to the dead-letter queue (if enabled).
+MAX_RECEIVES = 5
 
 class SQSBroker(dramatiq.Broker):
     """A Dramatiq_ broker that can be used with `Amazon SQS`_
@@ -32,7 +36,6 @@ class SQSBroker(dramatiq.Broker):
     This backend has a number of limitations compared to the built-in
     Redis and RMQ backends:
 
-      * it does not currently implement a dead-letter queue,
       * the max amount of time messages can be delayed by is 15 minutes,
       * messages can be at most 256KiB large,
       * messages must be processed within 2 hours of being pulled,
@@ -46,6 +49,9 @@ class SQSBroker(dramatiq.Broker):
       middleware: The set of middleware that apply to this broker.
       retention: The number of seconds messages can be retained for.
         Defaults to 14 days.
+      dead_letter: Whether to add a dead-letter queue. Defaults to false.
+      max_receives: The number of times a message should be received before
+        being added to the dead-letter queue. Defaults to MAX_RECEIVES.
       \**options: Additional options that are passed to boto3.
 
     .. _Dramatiq: https://dramatiq.io
@@ -59,6 +65,8 @@ class SQSBroker(dramatiq.Broker):
             namespace: Optional[str] = None,
             middleware: Optional[List[dramatiq.Middleware]] = None,
             retention: int = MAX_MESSAGE_RETENTION,
+            dead_letter: bool = False,
+            max_receives: int = MAX_RECEIVES,
             **options,
     ) -> None:
         super().__init__(middleware=middleware)
@@ -69,6 +77,8 @@ class SQSBroker(dramatiq.Broker):
         self.namespace: str = namespace
         self.retention: str = str(retention)
         self.queues: Dict[str, Any] = {}
+        self.dead_letter: bool = dead_letter
+        self.max_receives: int = max_receives
         self.sqs: Any = boto3.resource("sqs", **options)
 
     def consume(self, queue_name: str, prefetch: int = 1, timeout: int = 30000) -> dramatiq.Consumer:
@@ -93,6 +103,18 @@ class SQSBroker(dramatiq.Broker):
                     "MessageRetentionPeriod": self.retention,
                 }
             )
+            if self.dead_letter:
+                dead_letter_queue_name = f'{prefixed_queue_name}_dlq'
+                dead_letter_queue = self.sqs.create_queue(
+                    QueueName=dead_letter_queue_name
+                )
+                redrive_policy = {
+                    "deadLetterTargetArn": dead_letter_queue.attributes['QueueArn'],
+                    "maxReceiveCount": str(self.max_receives)
+                }
+                self.queues[queue_name].set_attributes(Attributes={
+                    "RedrivePolicy": json.dumps(redrive_policy)
+                })
             self.emit_after("declare_queue", queue_name)
 
     def enqueue(self, message: dramatiq.Message, *, delay: Optional[int] = None) -> dramatiq.Message:
@@ -137,7 +159,7 @@ class _SQSConsumer(dramatiq.Consumer):
     def ack(self, message: "_SQSMessage") -> None:
         message._sqs_message.delete()
 
-    #: We don't use DLQs yet so nack is the same as ack.
+    #: Messages are added to DLQ by SQS redrive policy, so no actions are necessary
     nack = ack
 
     def requeue(self, messages: Iterable["_SQSMessage"]) -> None:

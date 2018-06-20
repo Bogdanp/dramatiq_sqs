@@ -5,7 +5,6 @@ A [Dramatiq] broker that can be used with [Amazon SQS].
 This backend has a number of limitations compared to the built-in
 Redis and RMQ backends:
 
-* it does not currently implement a dead-letter queue,
 * the max amount of time messages can be delayed by is 15 minutes,
 * messages can be at most 256KiB large and
 * messages must be processed within 2 hours of being pulled, otherwise
