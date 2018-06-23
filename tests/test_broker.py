@@ -1,7 +1,8 @@
+import json
+import time
+
 import dramatiq
 import pytest
-import time
-import json
 
 from botocore.stub import Stubber
 from dramatiq_sqs import SQSBroker
@@ -105,34 +106,31 @@ def test_can_requeue_consumed_messages(broker, queue_name):
 
 
 def test_creates_dead_letter_queue():
-    # When I create a queue with the dead letter option and
-    # max receives specified
+    # Given that I have an SQS broker with dead letters turned on
     broker = SQSBroker(
         namespace="dramatiq_sqs_tests",
         dead_letter=True,
         max_receives=20,
     )
-    stubber = Stubber(broker.sqs.meta.client)
 
+    # And I've stubbed out all the relevant API calls
+    stubber = Stubber(broker.sqs.meta.client)
     stubber.add_response("create_queue", {"QueueUrl": ""})
     stubber.add_response("create_queue", {"QueueUrl": ""})
-    stubber.add_response("get_queue_attributes", {
-        "Attributes": {"QueueArn": "dlq"}
-    })
-    redrive_policy = {
-        "deadLetterTargetArn": "dlq",
-        "maxReceiveCount": "20"
-    }
-    expected_queue_params = {
+    stubber.add_response("get_queue_attributes", {"Attributes": {"QueueArn": "dlq"}})
+    stubber.add_response("set_queue_attributes", {}, {
         "QueueUrl": "",
         "Attributes": {
-            "RedrivePolicy": json.dumps(redrive_policy)
+            "RedrivePolicy": json.dumps({
+                "deadLetterTargetArn": "dlq",
+                "maxReceiveCount": "20"
+            })
         }
-    }
-    stubber.add_response("set_queue_attributes", {}, expected_queue_params)
+    })
 
-    # When I create a queue, a dead-letter queue should be created and a
-    # redrive policy matching the queue and max receives should be added
+    # When I create a queue
+    # Then a dead-letter queue should be created
+    # And a redrive policy matching the queue and max receives should be added
     with stubber:
         broker.declare_queue("test")
         stubber.assert_no_pending_responses()
