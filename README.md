@@ -16,7 +16,7 @@ authorization works, check out its [docs].
 
 ## Installation
 
-    pipenv install dramatiq_sqs
+    pip install dramatiq_sqs
 
 
 ## Usage

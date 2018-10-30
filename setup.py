@@ -25,5 +25,17 @@ setup(
     packages=["dramatiq_sqs"],
     include_package_data=True,
     install_requires=["boto3", "dramatiq"],
+    extras_require={
+        "dev": [
+            "bumpversion",
+            "flake8",
+            "flake8-quotes",
+            "isort",
+            "mypy",
+            "pytest",
+            "pytest-cov",
+            "twine",
+        ],
+    },
     python_requires=">=3.5",
 )
