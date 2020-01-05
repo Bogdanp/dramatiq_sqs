@@ -25,6 +25,28 @@ def test_can_enqueue_and_process_messages(broker, worker, queue_name):
     # Then the db should contain that message
     assert db == [1]
 
+def test_limits_prefetch_while_if_queue_is_full(broker, worker, queue_name):
+    # Given that I have an actor that stores incoming messages in a database
+    db = []
+
+    # Set the worker prefetch limit to 1
+    worker.queue_prefetch = 1
+
+    # Add delay to actor logic to simulate processing time
+    @dramatiq.actor(queue_name=queue_name)
+    def do_work(x):
+        db.append(x)
+        time.sleep(100)
+
+    # When I send that actor messages, it'll only prefetch and process a single message
+    do_work.send(1)
+    do_work.send(2)
+
+    # Wait for message to be processed
+    time.sleep(2)
+
+    # Then the db should contain only that message, while it sleeps
+    assert db == [1]
 
 def test_can_enqueue_delayed_messages(broker, worker, queue_name):
     # Given that I have an actor that stores incoming messages in a database

@@ -155,9 +155,11 @@ class _SQSConsumer(dramatiq.Consumer):
         self.prefetch = min(prefetch, MAX_PREFETCH)
         self.timeout = timeout  # UNUSED
         self.messages: deque = deque()
+        self.message_refc = 0
 
     def ack(self, message: "_SQSMessage") -> None:
         message._sqs_message.delete()
+        self.message_refc -= 1
 
     #: Messages are added to DLQ by SQS redrive policy, so no actions are necessary
     nack = ack
@@ -180,21 +182,25 @@ class _SQSConsumer(dramatiq.Consumer):
                 "ReceiptHandle": message._sqs_message.receipt_handle,
             } for i, message in enumerate(requeued_messages)])
 
+            self.message_refc -= len(requeued_messages)
+
     def __next__(self) -> Optional[dramatiq.Message]:
         try:
             return self.messages.popleft()
         except IndexError:
-            for sqs_message in self.queue.receive_messages(
-                MaxNumberOfMessages=self.prefetch,
-                WaitTimeSeconds=MIN_TIMEOUT,
-                VisibilityTimeout=MAX_VISIBILITY_TIMEOUT,
-            ):
-                try:
-                    encoded_message = b64decode(sqs_message.body)
-                    dramatiq_message = dramatiq.Message.decode(encoded_message)
-                    self.messages.append(_SQSMessage(sqs_message, dramatiq_message))
-                except Exception:  # pragma: no cover
-                    self.logger.exception("Failed to decode message: %r", sqs_message.body)
+            if self.message_refc < self.prefetch:
+                for sqs_message in self.queue.receive_messages(
+                    MaxNumberOfMessages=self.prefetch,
+                    WaitTimeSeconds=MIN_TIMEOUT,
+                    VisibilityTimeout=MAX_VISIBILITY_TIMEOUT,
+                ):
+                    try:
+                        encoded_message = b64decode(sqs_message.body)
+                        dramatiq_message = dramatiq.Message.decode(encoded_message)
+                        self.messages.append(_SQSMessage(sqs_message, dramatiq_message))
+                        self.message_refc += 1
+                    except Exception:  # pragma: no cover
+                        self.logger.exception("Failed to decode message: %r", sqs_message.body)
 
             try:
                 return self.messages.popleft()
