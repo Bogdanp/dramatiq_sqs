@@ -37,7 +37,7 @@ def test_limits_prefetch_while_if_queue_is_full(broker, worker, queue_name):
     @dramatiq.actor(queue_name=queue_name)
     def do_work(x):
         db.append(x)
-        time.sleep(100)
+        time.sleep(10)
 
     # When I send that actor messages, it'll only prefetch and process a single message
     do_work.send(1)
