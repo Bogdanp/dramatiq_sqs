@@ -1,11 +1,12 @@
-import boto3
-import dramatiq
 import logging
-import pytest
 import random
 import uuid
 
-from dramatiq.middleware import AgeLimit, TimeLimit, Callbacks, Pipelines, Retries
+import dramatiq
+import pytest
+from dramatiq.middleware import (AgeLimit, Callbacks, Pipelines, Retries,
+                                 TimeLimit)
+
 from dramatiq_sqs import SQSBroker
 
 logfmt = "[%(asctime)s] [%(threadName)s] [%(name)s] [%(levelname)s] %(message)s"

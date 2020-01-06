@@ -1,12 +1,12 @@
-import boto3
-import dramatiq
 import json
 import os
-
 from base64 import b64decode, b64encode
 from collections import deque
-from dramatiq.logging import get_logger
 from typing import Any, Dict, Iterable, List, Optional, Sequence, TypeVar
+
+import boto3
+import dramatiq
+from dramatiq.logging import get_logger
 
 #: The max number of bytes in a message.
 MAX_MESSAGE_SIZE = 256 * 1024
@@ -30,6 +30,7 @@ MIN_TIMEOUT = int(os.getenv("DRAMATIQ_SQS_MIN_TIMEOUT", "20"))
 #: to the dead-letter queue (if enabled).
 MAX_RECEIVES = 5
 
+
 class SQSBroker(dramatiq.Broker):
     """A Dramatiq_ broker that can be used with `Amazon SQS`_
 
@@ -52,7 +53,7 @@ class SQSBroker(dramatiq.Broker):
       dead_letter: Whether to add a dead-letter queue. Defaults to false.
       max_receives: The number of times a message should be received before
         being added to the dead-letter queue. Defaults to MAX_RECEIVES.
-      \**options: Additional options that are passed to boto3.
+      **options: Additional options that are passed to boto3.
 
     .. _Dramatiq: https://dramatiq.io
     .. _Amazon SQS: https://aws.amazon.com/sqs/
@@ -104,12 +105,12 @@ class SQSBroker(dramatiq.Broker):
                 }
             )
             if self.dead_letter:
-                dead_letter_queue_name = f'{prefixed_queue_name}_dlq'
+                dead_letter_queue_name = f"{prefixed_queue_name}_dlq"
                 dead_letter_queue = self.sqs.create_queue(
                     QueueName=dead_letter_queue_name
                 )
                 redrive_policy = {
-                    "deadLetterTargetArn": dead_letter_queue.attributes['QueueArn'],
+                    "deadLetterTargetArn": dead_letter_queue.attributes["QueueArn"],
                     "maxReceiveCount": str(self.max_receives)
                 }
                 self.queues[queue_name].set_attributes(Attributes={
