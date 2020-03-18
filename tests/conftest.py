@@ -26,6 +26,7 @@ def broker():
             Pipelines(),
             Retries(min_backoff=1000, max_backoff=900000, max_retries=96),
         ],
+        region_name="us-west-1",
     )
     dramatiq.set_broker(broker)
     yield broker

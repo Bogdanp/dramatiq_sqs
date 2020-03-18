@@ -1,11 +1,13 @@
 import json
 import os
+import time
 from base64 import b64decode, b64encode
 from collections import deque
 from typing import Any, Dict, Iterable, List, Optional, Sequence, TypeVar
 
 import boto3
 import dramatiq
+from dramatiq.common import compute_backoff
 from dramatiq.logging import get_logger
 
 #: The max number of bytes in a message.
@@ -154,7 +156,8 @@ class _SQSConsumer(dramatiq.Consumer):
         self.logger = get_logger(__name__, type(self))
         self.queue = queue
         self.prefetch = min(prefetch, MAX_PREFETCH)
-        self.timeout = timeout  # UNUSED
+        self.timeout = timeout
+        self.misses = 0
         self.messages: deque = deque()
         self.message_refc = 0
 
@@ -190,6 +193,7 @@ class _SQSConsumer(dramatiq.Consumer):
             return self.messages.popleft()
         except IndexError:
             if self.message_refc < self.prefetch:
+                message_count = 0
                 for sqs_message in self.queue.receive_messages(
                     MaxNumberOfMessages=self.prefetch,
                     WaitTimeSeconds=MIN_TIMEOUT,
@@ -200,12 +204,18 @@ class _SQSConsumer(dramatiq.Consumer):
                         dramatiq_message = dramatiq.Message.decode(encoded_message)
                         self.messages.append(_SQSMessage(sqs_message, dramatiq_message))
                         self.message_refc += 1
+                        message_count += 1
                     except Exception:  # pragma: no cover
                         self.logger.exception("Failed to decode message: %r", sqs_message.body)
+                if message_count > 0:
+                    self.misses = 0
 
             try:
                 return self.messages.popleft()
             except IndexError:
+                # because there are no messages returned from SQS progressively wait timeout
+                self.misses, backoff_ms = compute_backoff(self.misses, max_backoff=self.timeout)
+                time.sleep(backoff_ms / 1000)
                 return None
 
 

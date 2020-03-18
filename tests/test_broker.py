@@ -158,3 +158,24 @@ def test_creates_dead_letter_queue():
     with stubber:
         broker.declare_queue("test")
         stubber.assert_no_pending_responses()
+
+
+def test_can_progressively_wait_for_sqs_messages(broker, queue_name):
+    # Given that I have an actor that does nothing
+    @dramatiq.actor(queue_name=queue_name)
+    def do_work():
+        pass
+
+    # When I attempt to pull the message from sqs and receive no messages
+    # Then compute sleep time and sleep
+    # Add delay to actor logic to simulate processing time
+
+    # I dont do anything and wait for messages
+    # I expect worker to sleep and call common.compute_backoff
+    consumer = broker.consume(queue_name)
+
+    for i in range(5):
+        # there are no messages and it should wait
+        next(consumer)
+
+    assert consumer.misses > 0
