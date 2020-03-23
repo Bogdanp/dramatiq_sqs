@@ -75,7 +75,7 @@ class SQSBroker(dramatiq.Broker):
         if retention < MIN_MESSAGE_RETENTION or retention > MAX_MESSAGE_RETENTION:
             raise ValueError(f"'retention' must be between {MIN_MESSAGE_RETENTION} and {MAX_MESSAGE_RETENTION}.")
 
-        self.namespace: str = namespace
+        self.namespace: Optional[str] = namespace
         self.retention: str = str(retention)
         self.queues: Dict[str, Any] = {}
         self.dead_letter: bool = dead_letter
