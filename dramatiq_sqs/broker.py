@@ -62,13 +62,13 @@ class SQSBroker(dramatiq.Broker):
     """
 
     def __init__(
-            self, *,
-            namespace: Optional[str] = None,
-            middleware: Optional[List[dramatiq.Middleware]] = None,
-            retention: int = MAX_MESSAGE_RETENTION,
-            dead_letter: bool = False,
-            max_receives: int = MAX_RECEIVES,
-            **options,
+        self, *,
+        namespace: Optional[str] = None,
+        middleware: Optional[List[dramatiq.Middleware]] = None,
+        retention: int = MAX_MESSAGE_RETENTION,
+        dead_letter: bool = False,
+        max_receives: int = MAX_RECEIVES,
+        **options,
     ) -> None:
         super().__init__(middleware=middleware)
 
@@ -91,18 +91,26 @@ class SQSBroker(dramatiq.Broker):
     def declare_queue(self, queue_name: str) -> None:
         if queue_name not in self.queues:
             prefixed_queue_name = queue_name
+
+            queue_attributes = {
+                "MessageRetentionPeriod": self.retention,
+            }
+
             if self.namespace is not None:
                 prefixed_queue_name = "%(namespace)s_%(queue_name)s" % {
                     "namespace": self.namespace,
                     "queue_name": queue_name,
                 }
 
+            if is_fifo(queue_name):
+                queue_attributes = {
+                    "FifoQueue": "true"
+                }
+
             self.emit_before("declare_queue", queue_name)
             self.queues[queue_name] = self.sqs.create_queue(
                 QueueName=prefixed_queue_name,
-                Attributes={
-                    "MessageRetentionPeriod": self.retention,
-                }
+                Attributes=queue_attributes
             )
             if self.dead_letter:
                 dead_letter_queue_name = f"{prefixed_queue_name}_dlq"
@@ -118,8 +126,22 @@ class SQSBroker(dramatiq.Broker):
                 })
             self.emit_after("declare_queue", queue_name)
 
-    def enqueue(self, message: dramatiq.Message, *, delay: Optional[int] = None) -> dramatiq.Message:
+    def enqueue(
+        self,
+        message: dramatiq.Message,
+        *,
+        delay: Optional[int] = None,
+        fifo_message_group_id: Optional[str] = None,
+        fifo_message_deduplication_id: Optional[str] = None,
+    ) -> dramatiq.Message:
         queue_name = message.queue_name
+
+        if is_fifo(queue_name) and delay is not None:
+            raise RuntimeError("Fifo queues doesn't hava delay option")
+
+        if is_fifo(queue_name) and fifo_message_group_id is None:
+            raise RuntimeError("Fifo queues require message group id")
+
         if delay is None:
             queue = self.queues[queue_name]
             delay_seconds = 0
@@ -135,10 +157,21 @@ class SQSBroker(dramatiq.Broker):
 
         self.logger.debug("Enqueueing message %r on queue %r.", message.message_id, queue_name)
         self.emit_before("enqueue", message, delay)
-        queue.send_message(
-            MessageBody=encoded_message,
-            DelaySeconds=delay_seconds,
-        )
+        if is_fifo(queue_name):
+            fifo_attributes = {
+                "MessageBody": encoded_message,
+                "MessageGroupId": fifo_message_group_id
+            }
+
+            if fifo_message_deduplication_id:
+                fifo_attributes["MessageDeduplicationId"] = fifo_message_deduplication_id
+
+            queue.send_message(**fifo_attributes)
+        else:
+            queue.send_message(
+                MessageBody=encoded_message,
+                DelaySeconds=delay_seconds,
+            )
         self.emit_after("enqueue", message, delay)
         return message
 
@@ -231,3 +264,7 @@ def chunk(xs: Iterable[T], *, chunksize=10) -> Iterable[Sequence[T]]:
 
     if chunk:
         yield chunk
+
+
+def is_fifo(queue_name):
+    return queue_name.endswith(".fifo")
