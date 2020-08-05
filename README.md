@@ -51,6 +51,32 @@ broker = SQSBroker(
 )
 ```
 
+## Example IAM Policy
+
+For grained fine AWS permissions, the following IAM policy
+can be attached to the IAM User/Role where Dramatiq is running:
+
+``` json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "sqs:CreateQueue",
+                "sqs:ReceiveMessage",
+                "sqs:DeleteMessage",
+                "sqs:DeleteMessageBatch",
+                "sqs:SendMessage",
+                "sqs:SendMessageBatch"
+            ],
+            "Resource": ["*"]
+        }
+    ]
+}
+```
+
+More info at [AWS documentation](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies.html)
 
 ## License
 
