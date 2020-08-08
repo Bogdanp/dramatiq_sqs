@@ -53,8 +53,7 @@ broker = SQSBroker(
 
 ## Example IAM Policy
 
-For grained fine AWS permissions, the following IAM policy
-can be attached to the IAM User/Role where Dramatiq is running:
+Here are the IAM permissions needed by Dramatiq:
 
 ``` json
 {
@@ -75,8 +74,6 @@ can be attached to the IAM User/Role where Dramatiq is running:
     ]
 }
 ```
-
-More info at [AWS documentation](https://docs.aws.amazon.com/IAM/latest/UserGuide/access_policies.html)
 
 ## License
 
