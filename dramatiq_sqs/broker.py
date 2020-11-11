@@ -118,7 +118,13 @@ class SQSBroker(dramatiq.Broker):
                 })
             self.emit_after("declare_queue", queue_name)
 
-    def enqueue(self, message: dramatiq.Message, *, delay: Optional[int] = None) -> dramatiq.Message:
+    def enqueue(
+            self,
+            message: dramatiq.Message,
+            *,
+            message_group_id: Optional[str] = None,
+            delay: Optional[int] = None
+    ) -> dramatiq.Message:
         queue_name = message.queue_name
         if delay is None:
             queue = self.queues[queue_name]
@@ -135,10 +141,14 @@ class SQSBroker(dramatiq.Broker):
 
         self.logger.debug("Enqueueing message %r on queue %r.", message.message_id, queue_name)
         self.emit_before("enqueue", message, delay)
-        queue.send_message(
-            MessageBody=encoded_message,
-            DelaySeconds=delay_seconds,
-        )
+        send_message_args = {
+            "MessageBody": encoded_message,
+            "DelaySeconds": delay_seconds
+        }
+        if message_group_id is not None:
+            send_message_args["MessageGroupId"] = message_group_id
+
+        queue.send_message({**queue_args})
         self.emit_after("enqueue", message, delay)
         return message
 
