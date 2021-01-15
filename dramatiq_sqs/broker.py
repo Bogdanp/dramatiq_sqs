@@ -68,6 +68,7 @@ class SQSBroker(dramatiq.Broker):
             retention: int = MAX_MESSAGE_RETENTION,
             dead_letter: bool = False,
             max_receives: int = MAX_RECEIVES,
+            tags: Optional[Dict[str, str]] = None,
             **options,
     ) -> None:
         super().__init__(middleware=middleware)
@@ -80,6 +81,7 @@ class SQSBroker(dramatiq.Broker):
         self.queues: Dict[str, Any] = {}
         self.dead_letter: bool = dead_letter
         self.max_receives: int = max_receives
+        self.tags: Optional[Dict[str, str]] = tags
         self.sqs: Any = boto3.resource("sqs", **options)
 
     def consume(self, queue_name: str, prefetch: int = 1, timeout: int = 30000) -> dramatiq.Consumer:
@@ -104,11 +106,22 @@ class SQSBroker(dramatiq.Broker):
                     "MessageRetentionPeriod": self.retention,
                 }
             )
+            if self.tags:
+                self.sqs.meta.client.tag_queue(
+                    QueueUrl=self.queues[queue_name].url,
+                    Tags=self.tags
+                )
+
             if self.dead_letter:
                 dead_letter_queue_name = f"{prefixed_queue_name}_dlq"
                 dead_letter_queue = self.sqs.create_queue(
                     QueueName=dead_letter_queue_name
                 )
+                if self.tags:
+                    self.sqs.meta.client.tag_queue(
+                        QueueUrl=dead_letter_queue.url,
+                        Tags=self.tags
+                    )
                 redrive_policy = {
                     "deadLetterTargetArn": dead_letter_queue.attributes["QueueArn"],
                     "maxReceiveCount": str(self.max_receives)

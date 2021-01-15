@@ -26,6 +26,9 @@ def broker():
             Pipelines(),
             Retries(min_backoff=1000, max_backoff=900000, max_retries=96),
         ],
+        tags={
+            "owner": "dramatiq_sqs_tests",
+        },
     )
     dramatiq.set_broker(broker)
     yield broker
