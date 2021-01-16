@@ -6,7 +6,6 @@ import pytest
 from botocore.stub import Stubber
 
 from dramatiq_sqs import SQSBroker
-from dramatiq_sqs.broker import MAX_MESSAGE_RETENTION
 
 
 def test_can_enqueue_and_process_messages(broker, worker, queue_name):
