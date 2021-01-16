@@ -6,6 +6,7 @@ import pytest
 from botocore.stub import Stubber
 
 from dramatiq_sqs import SQSBroker
+from dramatiq_sqs.broker import MAX_MESSAGE_RETENTION
 
 
 def test_can_enqueue_and_process_messages(broker, worker, queue_name):
@@ -155,6 +156,31 @@ def test_creates_dead_letter_queue():
     # When I create a queue
     # Then a dead-letter queue should be created
     # And a redrive policy matching the queue and max receives should be added
+    with stubber:
+        broker.declare_queue("test")
+        stubber.assert_no_pending_responses()
+
+
+def test_tags_queues_on_create():
+    # Given that I have an SQS broker with tags
+    broker = SQSBroker(
+        namespace="dramatiq_sqs_tests",
+        tags={"key1": "value1", "key2": "value2"}
+    )
+
+    # And I've stubbed out all the relevant API calls
+    stubber = Stubber(broker.sqs.meta.client)
+    stubber.add_response("create_queue", {"QueueUrl": ""})
+    stubber.add_response("tag_queue", {}, {
+        "QueueUrl": "",
+        "Tags": {
+            "key1": "value1",
+            "key2": "value2"
+        }
+    })
+
+    # When I create a queue
+    # Then the queue should have the specified tags
     with stubber:
         broker.declare_queue("test")
         stubber.assert_no_pending_responses()
