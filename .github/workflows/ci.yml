@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build-linux:
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        os: ["ubuntu-latest"]
+        python: ["3.7", "3.8", "3.9"]
+
+    runs-on: ${{ matrix.os }}
+    name: test on ${{ matrix.python }} (${{ matrix.os }})
+    env:
+      AWS_DEFAULT_REGION: us-east-2
+
+    steps:
+      - uses: actions/checkout@master
+      - uses: actions/setup-python@v2
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -e '.[dev]'
+      - run: pytest tests
+
+  build-windows:
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        os: ["windows-2016"]
+        python: ["3.7", "3.8", "3.9"]
+
+    runs-on: ${{ matrix.os }}
+    name: test on ${{ matrix.python }} (${{ matrix.os }})
+    env:
+      AWS_DEFAULT_REGION: us-east-2
+
+    steps:
+      - uses: actions/checkout@master
+      - name: Install Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install deps
+        run: pip install -e '.[dev]'
+
+      - name: Run tests
+        run: pytest tests
