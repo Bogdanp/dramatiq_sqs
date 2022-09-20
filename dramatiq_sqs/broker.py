@@ -62,14 +62,15 @@ class SQSBroker(dramatiq.Broker):
     """
 
     def __init__(
-            self, *,
-            namespace: Optional[str] = None,
-            middleware: Optional[List[dramatiq.Middleware]] = None,
-            retention: int = MAX_MESSAGE_RETENTION,
-            dead_letter: bool = False,
-            max_receives: int = MAX_RECEIVES,
-            tags: Optional[Dict[str, str]] = None,
-            **options,
+        self,
+        *,
+        namespace: Optional[str] = None,
+        middleware: Optional[List[dramatiq.Middleware]] = None,
+        retention: int = MAX_MESSAGE_RETENTION,
+        dead_letter: bool = False,
+        max_receives: int = MAX_RECEIVES,
+        tags: Optional[Dict[str, str]] = None,
+        **options,
     ) -> None:
         super().__init__(middleware=middleware)
 
@@ -104,31 +105,21 @@ class SQSBroker(dramatiq.Broker):
                 QueueName=prefixed_queue_name,
                 Attributes={
                     "MessageRetentionPeriod": self.retention,
-                }
+                },
             )
             if self.tags:
-                self.sqs.meta.client.tag_queue(
-                    QueueUrl=self.queues[queue_name].url,
-                    Tags=self.tags
-                )
+                self.sqs.meta.client.tag_queue(QueueUrl=self.queues[queue_name].url, Tags=self.tags)
 
             if self.dead_letter:
                 dead_letter_queue_name = f"{prefixed_queue_name}_dlq"
-                dead_letter_queue = self.sqs.create_queue(
-                    QueueName=dead_letter_queue_name
-                )
+                dead_letter_queue = self.sqs.create_queue(QueueName=dead_letter_queue_name)
                 if self.tags:
-                    self.sqs.meta.client.tag_queue(
-                        QueueUrl=dead_letter_queue.url,
-                        Tags=self.tags
-                    )
+                    self.sqs.meta.client.tag_queue(QueueUrl=dead_letter_queue.url, Tags=self.tags)
                 redrive_policy = {
                     "deadLetterTargetArn": dead_letter_queue.attributes["QueueArn"],
-                    "maxReceiveCount": str(self.max_receives)
+                    "maxReceiveCount": str(self.max_receives),
                 }
-                self.queues[queue_name].set_attributes(Attributes={
-                    "RedrivePolicy": json.dumps(redrive_policy)
-                })
+                self.queues[queue_name].set_attributes(Attributes={"RedrivePolicy": json.dumps(redrive_policy)})
             self.emit_after("declare_queue", queue_name)
 
     def enqueue(self, message: dramatiq.Message, *, delay: Optional[int] = None) -> dramatiq.Message:
@@ -146,7 +137,11 @@ class SQSBroker(dramatiq.Broker):
         if len(encoded_message) > MAX_MESSAGE_SIZE:
             raise RuntimeError("Messages in SQS can be at most 256KiB large.")
 
-        self.logger.debug("Enqueueing message %r on queue %r.", message.message_id, queue_name)
+        self.logger.debug(
+            "Enqueueing message %r on queue %r.",
+            message.message_id,
+            queue_name,
+        )
         self.emit_before("enqueue", message, delay)
         queue.send_message(
             MessageBody=encoded_message,
@@ -181,20 +176,30 @@ class _SQSConsumer(dramatiq.Consumer):
     def requeue(self, messages: Iterable["_SQSMessage"]) -> None:
         for batch in chunk(messages, chunksize=10):
             # Re-enqueue batches of up to 10 messages.
-            send_response = self.queue.send_messages(Entries=[{
-                "Id": str(i),
-                "MessageBody": message._sqs_message.body,
-            } for i, message in enumerate(batch)])
+            send_response = self.queue.send_messages(
+                Entries=[
+                    {
+                        "Id": str(i),
+                        "MessageBody": message._sqs_message.body,
+                    }
+                    for i, message in enumerate(batch)
+                ]
+            )
 
             # Then delete the ones that were successfully re-enqueued.
             # The rest will have to wait until their visibility
             # timeout expires.
             failed_message_ids = [int(res["Id"]) for res in send_response.get("Failed", [])]
             requeued_messages = [m for i, m in enumerate(batch) if i not in failed_message_ids]
-            self.queue.delete_messages(Entries=[{
-                "Id": str(i),
-                "ReceiptHandle": message._sqs_message.receipt_handle,
-            } for i, message in enumerate(requeued_messages)])
+            self.queue.delete_messages(
+                Entries=[
+                    {
+                        "Id": str(i),
+                        "ReceiptHandle": message._sqs_message.receipt_handle,
+                    }
+                    for i, message in enumerate(requeued_messages)
+                ]
+            )
 
             self.message_refc -= len(requeued_messages)
 
@@ -233,8 +238,7 @@ T = TypeVar("T")
 
 
 def chunk(xs: Iterable[T], *, chunksize=10) -> Iterable[Sequence[T]]:
-    """Split a sequence into subseqs of chunksize length.
-    """
+    """Split a sequence into subseqs of chunksize length."""
     chunk = []
     for x in xs:
         chunk.append(x)

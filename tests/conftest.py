@@ -4,8 +4,7 @@ import uuid
 
 import dramatiq
 import pytest
-from dramatiq.middleware import (AgeLimit, Callbacks, Pipelines, Retries,
-                                 TimeLimit)
+from dramatiq.middleware import AgeLimit, Callbacks, Pipelines, Retries, TimeLimit
 
 from dramatiq_sqs import SQSBroker
 
@@ -18,13 +17,18 @@ random.seed(1337)
 @pytest.fixture
 def broker():
     broker = SQSBroker(
+        endpoint_url="http://127.0.0.1:9324",
+        region_name="elasticmq",
+        aws_secret_access_key="x",
+        aws_access_key_id="x",
+        use_ssl=False,
         namespace="dramatiq_sqs_tests",
         middleware=[
             AgeLimit(),
             TimeLimit(),
             Callbacks(),
             Pipelines(),
-            Retries(min_backoff=1000, max_backoff=900000, max_retries=96),
+            Retries(min_backoff=1, max_backoff=900000, max_retries=2),
         ],
         tags={
             "owner": "dramatiq_sqs_tests",

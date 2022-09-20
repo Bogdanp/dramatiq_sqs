@@ -27,13 +27,14 @@ setup(
     install_requires=["boto3", "dramatiq"],
     extras_require={
         "dev": [
+            "black",
             "bumpversion",
-            "flake8",
             "flake8-quotes",
+            "flake8",
             "isort",
             "mypy",
-            "pytest",
             "pytest-cov",
+            "pytest",
             "twine",
         ],
     },

@@ -16,5 +16,5 @@ def test_chunk_can_split_iterators_into_chunks():
         [6, 7],
         [8, 9],
         [10, 11],
-        [12]
+        [12],
     ]
