@@ -1,4 +1,7 @@
-from dramatiq_sqs.broker import chunk
+import pytest
+
+from dramatiq_sqs.dto import QueueName
+from dramatiq_sqs.utils import build_queue_name, chunk
 
 
 def test_chunk_can_split_iterators_into_chunks():
@@ -18,3 +21,15 @@ def test_chunk_can_split_iterators_into_chunks():
         [10, 11],
         [12],
     ]
+
+
+@pytest.mark.parametrize(
+    "namespace,queue_name,expected",
+    [
+        ("namespace", "queue", QueueName(default="namespace_queue", dlq="namespace_queue_dlq")),
+        ("", "queue", QueueName(default="queue", dlq="queue_dlq")),
+        (None, "queue", QueueName(default="queue", dlq="queue_dlq")),
+    ],
+)
+def test_should_return_a_queue_name(namespace, queue_name, expected):
+    assert build_queue_name(queue_name=queue_name, namespace=namespace) == expected

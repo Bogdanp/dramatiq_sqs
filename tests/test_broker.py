@@ -1,5 +1,6 @@
 import json
 import time
+from unittest import mock
 
 import dramatiq
 import pytest
@@ -197,3 +198,26 @@ def test_tags_queues_on_create():
     with stubber:
         broker.declare_queue("test")
         stubber.assert_no_pending_responses()
+
+
+def test_should_use_predefined_queue():
+    broker = SQSBroker(
+        namespace="dramatiq_sqs_tests",
+        endpoint_url="http://127.0.0.1:9324",
+        region_name="elasticmq",
+        aws_secret_access_key="x",
+        aws_access_key_id="x",
+        use_ssl=False,
+        use_predefined_queues=True,
+    )
+
+    fake_sqs = mock.MagicMock()
+    SQSBroker.sqs = mock.PropertyMock(return_value=fake_sqs)
+
+    stubber = Stubber(broker.sqs.meta.client)
+
+    with stubber:
+        broker.declare_queue("test")
+        stubber.assert_no_pending_responses()
+
+    assert fake_sqs.get_queue_by_name.call_args == mock.call(QueueName="dramatiq_sqs_tests_test")

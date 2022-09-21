@@ -1,12 +1,15 @@
-import json
 import os
 from base64 import b64decode, b64encode
 from collections import deque
-from typing import Any, Dict, Iterable, List, Optional, Sequence, TypeVar
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 import boto3
 import dramatiq
 from dramatiq.logging import get_logger
+
+from dramatiq_sqs.dto import QueueName
+
+from .utils import build_queue_name, chunk, create_queue, get_queue
 
 #: The max number of bytes in a message.
 MAX_MESSAGE_SIZE = 256 * 1024
@@ -53,6 +56,11 @@ class SQSBroker(dramatiq.Broker):
       dead_letter: Whether to add a dead-letter queue. Defaults to false.
       max_receives: The number of times a message should be received before
         being added to the dead-letter queue. Defaults to MAX_RECEIVES.
+      queue_nominator: The callable to generate queue names.
+        Defaults to dramatiq_sqs.utils.build_queue_name.
+      use_predefined_queues: This flag skip creation of queues and assumes
+        predefined queues. Default to false.
+
       **options: Additional options that are passed to boto3.
 
     .. _Dramatiq: https://dramatiq.io
@@ -69,6 +77,8 @@ class SQSBroker(dramatiq.Broker):
         retention: int = MAX_MESSAGE_RETENTION,
         dead_letter: bool = False,
         max_receives: int = MAX_RECEIVES,
+        queue_nominator: Callable[[str, Optional[str]], QueueName] = build_queue_name,
+        use_predefined_queues: bool = False,
         tags: Optional[Dict[str, str]] = None,
         **options,
     ) -> None:
@@ -78,11 +88,13 @@ class SQSBroker(dramatiq.Broker):
             raise ValueError(f"'retention' must be between {MIN_MESSAGE_RETENTION} and {MAX_MESSAGE_RETENTION}.")
 
         self.namespace: Optional[str] = namespace
-        self.retention: str = str(retention)
+        self.retention: int = retention
         self.queues: Dict[str, Any] = {}
         self.dead_letter: bool = dead_letter
         self.max_receives: int = max_receives
         self.tags: Optional[Dict[str, str]] = tags
+        self.queue_nominator = queue_nominator
+        self.use_predefined_queues = use_predefined_queues
         self.sqs: Any = boto3.resource("sqs", **options)
 
     def consume(self, queue_name: str, prefetch: int = 1, timeout: int = 30000) -> dramatiq.Consumer:
@@ -93,33 +105,22 @@ class SQSBroker(dramatiq.Broker):
 
     def declare_queue(self, queue_name: str) -> None:
         if queue_name not in self.queues:
-            prefixed_queue_name = queue_name
-            if self.namespace is not None:
-                prefixed_queue_name = "%(namespace)s_%(queue_name)s" % {
-                    "namespace": self.namespace,
-                    "queue_name": queue_name,
-                }
+            queue_names = self.queue_nominator(queue_name, self.namespace)
 
             self.emit_before("declare_queue", queue_name)
-            self.queues[queue_name] = self.sqs.create_queue(
-                QueueName=prefixed_queue_name,
-                Attributes={
-                    "MessageRetentionPeriod": self.retention,
-                },
-            )
-            if self.tags:
-                self.sqs.meta.client.tag_queue(QueueUrl=self.queues[queue_name].url, Tags=self.tags)
 
-            if self.dead_letter:
-                dead_letter_queue_name = f"{prefixed_queue_name}_dlq"
-                dead_letter_queue = self.sqs.create_queue(QueueName=dead_letter_queue_name)
-                if self.tags:
-                    self.sqs.meta.client.tag_queue(QueueUrl=dead_letter_queue.url, Tags=self.tags)
-                redrive_policy = {
-                    "deadLetterTargetArn": dead_letter_queue.attributes["QueueArn"],
-                    "maxReceiveCount": str(self.max_receives),
-                }
-                self.queues[queue_name].set_attributes(Attributes={"RedrivePolicy": json.dumps(redrive_policy)})
+            if self.use_predefined_queues:
+                self.queues[queue_name] = get_queue(sqs=self.sqs, queue_name=queue_names.default)
+            else:
+                self.queues[queue_name] = create_queue(
+                    sqs=self.sqs,
+                    queue_names=queue_names,
+                    max_receives=self.max_receives,
+                    retention=self.retention,
+                    tags=self.tags,
+                    dead_letter=self.dead_letter,
+                )
+
             self.emit_after("declare_queue", queue_name)
 
     def enqueue(self, message: dramatiq.Message, *, delay: Optional[int] = None) -> dramatiq.Message:
@@ -232,19 +233,3 @@ class _SQSMessage(dramatiq.MessageProxy):
         super().__init__(message)
 
         self._sqs_message = sqs_message
-
-
-T = TypeVar("T")
-
-
-def chunk(xs: Iterable[T], *, chunksize=10) -> Iterable[Sequence[T]]:
-    """Split a sequence into subseqs of chunksize length."""
-    chunk = []
-    for x in xs:
-        chunk.append(x)
-        if len(chunk) == chunksize:
-            yield chunk
-            chunk = []
-
-    if chunk:
-        yield chunk
