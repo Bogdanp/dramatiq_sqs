@@ -84,9 +84,13 @@ class SQSBroker(dramatiq.Broker):
         self.tags: Optional[Dict[str, str]] = tags
         self.sqs: Any = boto3.resource("sqs", **options)
 
+    @property
+    def consumer_class(self):
+        return SQSConsumer
+
     def consume(self, queue_name: str, prefetch: int = 1, timeout: int = 30000) -> dramatiq.Consumer:
         try:
-            return _SQSConsumer(self.queues[queue_name], prefetch, timeout)
+            return self.consumer_class(self.queues[queue_name], prefetch, timeout)
         except KeyError:  # pragma: no cover
             raise dramatiq.QueueNotFound(queue_name)
 
@@ -162,11 +166,12 @@ class SQSBroker(dramatiq.Broker):
         return set()
 
 
-class _SQSConsumer(dramatiq.Consumer):
+class SQSConsumer(dramatiq.Consumer):
     def __init__(self, queue: Any, prefetch: int, timeout: int) -> None:
         self.logger = get_logger(__name__, type(self))
         self.queue = queue
         self.prefetch = min(prefetch, MAX_PREFETCH)
+        self.visibility_timeout = MAX_VISIBILITY_TIMEOUT
         self.timeout = timeout  # UNUSED
         self.messages: deque = deque()
         self.message_refc = 0
@@ -199,15 +204,18 @@ class _SQSConsumer(dramatiq.Consumer):
             self.message_refc -= len(requeued_messages)
 
     def __next__(self) -> Optional[dramatiq.Message]:
+        kw = {
+            'MaxNumberOfMessages': self.prefetch,
+            'WaitTimeSeconds': MIN_TIMEOUT,
+        }
+        if self.visibility_timeout is not None:
+            kw['VisibilityTimeout'] = self.visibility_timeout
+
         try:
             return self.messages.popleft()
         except IndexError:
             if self.message_refc < self.prefetch:
-                for sqs_message in self.queue.receive_messages(
-                    MaxNumberOfMessages=self.prefetch,
-                    WaitTimeSeconds=MIN_TIMEOUT,
-                    VisibilityTimeout=MAX_VISIBILITY_TIMEOUT,
-                ):
+                for sqs_message in self.queue.receive_messages(**kw):
                     try:
                         encoded_message = b64decode(sqs_message.body)
                         dramatiq_message = dramatiq.Message.decode(encoded_message)
