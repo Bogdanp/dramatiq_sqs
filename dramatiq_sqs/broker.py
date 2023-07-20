@@ -205,11 +205,11 @@ class SQSConsumer(dramatiq.Consumer):
 
     def __next__(self) -> Optional[dramatiq.Message]:
         kw = {
-            'MaxNumberOfMessages': self.prefetch,
-            'WaitTimeSeconds': MIN_TIMEOUT,
+            "MaxNumberOfMessages": self.prefetch,
+            "WaitTimeSeconds": MIN_TIMEOUT,
         }
         if self.visibility_timeout is not None:
-            kw['VisibilityTimeout'] = self.visibility_timeout
+            kw["VisibilityTimeout"] = self.visibility_timeout
 
         try:
             return self.messages.popleft()
