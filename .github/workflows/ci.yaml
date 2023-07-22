@@ -1,0 +1,36 @@
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "*"
+
+  pull_request:
+    branches:
+      - "*"
+  workflow_dispatch:
+
+name: CI
+
+jobs:
+  ci:
+    name: Test
+    runs-on: "ubuntu-latest"
+    strategy:
+      matrix:
+        version: ["3.7", "3.8", "3.9", "3.10"]
+      fail-fast: false
+
+    services:
+      elasticmq-native:
+        image: softwaremill/elasticmq-native
+        ports:
+          - 9324:9324
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.version }}
+      - run: make install-dependencies
+      - run: make lint
+      - run: make test

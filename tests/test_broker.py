@@ -135,6 +135,11 @@ def test_creates_dead_letter_queue():
         namespace="dramatiq_sqs_tests",
         dead_letter=True,
         max_receives=20,
+        endpoint_url="http://127.0.0.1:9324",
+        region_name="elasticmq",
+        aws_secret_access_key="x",
+        aws_access_key_id="x",
+        use_ssl=False,
     )
 
     # And I've stubbed out all the relevant API calls
@@ -142,15 +147,21 @@ def test_creates_dead_letter_queue():
     stubber.add_response("create_queue", {"QueueUrl": ""})
     stubber.add_response("create_queue", {"QueueUrl": ""})
     stubber.add_response("get_queue_attributes", {"Attributes": {"QueueArn": "dlq"}})
-    stubber.add_response("set_queue_attributes", {}, {
-        "QueueUrl": "",
-        "Attributes": {
-            "RedrivePolicy": json.dumps({
-                "deadLetterTargetArn": "dlq",
-                "maxReceiveCount": "20"
-            })
-        }
-    })
+    stubber.add_response(
+        "set_queue_attributes",
+        {},
+        {
+            "QueueUrl": "",
+            "Attributes": {
+                "RedrivePolicy": json.dumps(
+                    {
+                        "deadLetterTargetArn": "dlq",
+                        "maxReceiveCount": "20",
+                    }
+                )
+            },
+        },
+    )
 
     # When I create a queue
     # Then a dead-letter queue should be created
@@ -164,19 +175,22 @@ def test_tags_queues_on_create():
     # Given that I have an SQS broker with tags
     broker = SQSBroker(
         namespace="dramatiq_sqs_tests",
-        tags={"key1": "value1", "key2": "value2"}
+        tags={"key1": "value1", "key2": "value2"},
+        endpoint_url="http://127.0.0.1:9324",
+        region_name="elasticmq",
+        aws_secret_access_key="x",
+        aws_access_key_id="x",
+        use_ssl=False,
     )
 
     # And I've stubbed out all the relevant API calls
     stubber = Stubber(broker.sqs.meta.client)
     stubber.add_response("create_queue", {"QueueUrl": ""})
-    stubber.add_response("tag_queue", {}, {
-        "QueueUrl": "",
-        "Tags": {
-            "key1": "value1",
-            "key2": "value2"
-        }
-    })
+    stubber.add_response(
+        "tag_queue",
+        {},
+        {"QueueUrl": "", "Tags": {"key1": "value1", "key2": "value2"}},
+    )
 
     # When I create a queue
     # Then the queue should have the specified tags
