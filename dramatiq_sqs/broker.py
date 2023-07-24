@@ -104,35 +104,42 @@ class SQSBroker(dramatiq.Broker):
                 }
 
             self.emit_before("declare_queue", queue_name)
-            self.queues[queue_name] = self.sqs.create_queue(
-                QueueName=prefixed_queue_name,
-                Attributes={
-                    "MessageRetentionPeriod": self.retention,
-                }
-            )
-            if self.tags:
-                self.sqs.meta.client.tag_queue(
-                    QueueUrl=self.queues[queue_name].url,
-                    Tags=self.tags
-                )
 
-            if self.dead_letter:
-                dead_letter_queue_name = f"{prefixed_queue_name}_dlq"
-                dead_letter_queue = self.sqs.create_queue(
-                    QueueName=dead_letter_queue_name
+            try:
+                self.queues[queue_name] = self.sqs.get_queue_by_name(
+                    QueueName=prefixed_queue_name,
+                )
+            except self.sqs.meta.client.exceptions.QueueDoesNotExist:
+                self.queues[queue_name] = self.sqs.create_queue(
+                    QueueName=prefixed_queue_name,
+                    Attributes={
+                        "MessageRetentionPeriod": self.retention,
+                    }
                 )
                 if self.tags:
                     self.sqs.meta.client.tag_queue(
-                        QueueUrl=dead_letter_queue.url,
+                        QueueUrl=self.queues[queue_name].url,
                         Tags=self.tags
                     )
-                redrive_policy = {
-                    "deadLetterTargetArn": dead_letter_queue.attributes["QueueArn"],
-                    "maxReceiveCount": str(self.max_receives)
-                }
-                self.queues[queue_name].set_attributes(Attributes={
-                    "RedrivePolicy": json.dumps(redrive_policy)
-                })
+
+                if self.dead_letter:
+                    dead_letter_queue_name = f"{prefixed_queue_name}_dlq"
+                    dead_letter_queue = self.sqs.create_queue(
+                        QueueName=dead_letter_queue_name
+                    )
+                    if self.tags:
+                        self.sqs.meta.client.tag_queue(
+                            QueueUrl=dead_letter_queue.url,
+                            Tags=self.tags
+                        )
+                    redrive_policy = {
+                        "deadLetterTargetArn": dead_letter_queue.attributes["QueueArn"],
+                        "maxReceiveCount": str(self.max_receives)
+                    }
+                    self.queues[queue_name].set_attributes(Attributes={
+                        "RedrivePolicy": json.dumps(redrive_policy)
+                    })
+
             self.emit_after("declare_queue", queue_name)
 
     def enqueue(self, message: dramatiq.Message, *, delay: Optional[int] = None) -> dramatiq.Message:
