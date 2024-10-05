@@ -139,7 +139,26 @@ def test_creates_dead_letter_queue():
 
     # And I've stubbed out all the relevant API calls
     stubber = Stubber(broker.sqs.meta.client)
+    error_response = {
+        'Error': {
+            'Code': 'AWS.SimpleQueueService.QueueDoesNotExist',
+            'Message': 'The specified queue does not exist.'
+        }
+    }
+    stubber.add_client_error(
+        "get_queue_url",
+        http_status_code=404,
+        service_error_code='QueueDoesNotExist',
+        service_message='The specified queue does not exist.',
+        response_meta=error_response)
     stubber.add_response("create_queue", {"QueueUrl": ""})
+    stubber.add_client_error(
+        "get_queue_url",
+        http_status_code=404,
+        service_error_code='QueueDoesNotExist',
+        service_message='The specified queue does not exist.',
+        response_meta=error_response)
+
     stubber.add_response("create_queue", {"QueueUrl": ""})
     stubber.add_response("get_queue_attributes", {"Attributes": {"QueueArn": "dlq"}})
     stubber.add_response("set_queue_attributes", {}, {
@@ -169,6 +188,18 @@ def test_tags_queues_on_create():
 
     # And I've stubbed out all the relevant API calls
     stubber = Stubber(broker.sqs.meta.client)
+    error_response = {
+        'Error': {
+            'Code': 'AWS.SimpleQueueService.QueueDoesNotExist',
+            'Message': 'The specified queue does not exist.'
+        }
+    }
+    stubber.add_client_error(
+        "get_queue_url",
+        http_status_code=404,
+        service_error_code='QueueDoesNotExist',
+        service_message='The specified queue does not exist.',
+        response_meta=error_response)
     stubber.add_response("create_queue", {"QueueUrl": ""})
     stubber.add_response("tag_queue", {}, {
         "QueueUrl": "",
