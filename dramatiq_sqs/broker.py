@@ -104,7 +104,8 @@ class SQSBroker(dramatiq.Broker):
                 }
 
             self.emit_before("declare_queue", queue_name)
-            self.queues[queue_name] = self.sqs.create_queue(
+
+            self.queues[queue_name] = self._get_or_create_queue(
                 QueueName=prefixed_queue_name,
                 Attributes={
                     "MessageRetentionPeriod": self.retention,
@@ -118,7 +119,7 @@ class SQSBroker(dramatiq.Broker):
 
             if self.dead_letter:
                 dead_letter_queue_name = f"{prefixed_queue_name}_dlq"
-                dead_letter_queue = self.sqs.create_queue(
+                dead_letter_queue = self._get_or_create_queue(
                     QueueName=dead_letter_queue_name
                 )
                 if self.tags:
@@ -134,6 +135,13 @@ class SQSBroker(dramatiq.Broker):
                     "RedrivePolicy": json.dumps(redrive_policy)
                 })
             self.emit_after("declare_queue", queue_name)
+
+    def _get_or_create_queue(self, **kwargs) -> Any:
+        try:
+            return self.sqs.get_queue_by_name(QueueName=kwargs['QueueName'])
+        except self.sqs.meta.client.exceptions.QueueDoesNotExist:
+            self.logger.debug(f'Queue does not exist, creating queue with params: {kwargs}')
+            return self.sqs.create_queue(**kwargs)
 
     def enqueue(self, message: dramatiq.Message, *, delay: Optional[int] = None) -> dramatiq.Message:
         queue_name = message.queue_name
