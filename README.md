@@ -6,7 +6,7 @@ This backend has a number of limitations compared to the built-in
 Redis and RMQ backends:
 
 * the max amount of time messages can be delayed by is 15 minutes,
-* messages can be at most 256KiB large and
+* messages can be at most 1MiB large and
 * messages must be processed within 2 hours of being pulled, otherwise
   they will be redelivered.
 
