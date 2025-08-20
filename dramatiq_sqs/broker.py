@@ -9,7 +9,7 @@ import dramatiq
 from dramatiq.logging import get_logger
 
 #: The max number of bytes in a message.
-MAX_MESSAGE_SIZE = 256 * 1024
+MAX_MESSAGE_SIZE = 1024 * 1024
 
 #: The min and max number of seconds messages may be retained for.
 MIN_MESSAGE_RETENTION = 60
@@ -38,7 +38,7 @@ class SQSBroker(dramatiq.Broker):
     Redis and RMQ backends:
 
       * the max amount of time messages can be delayed by is 15 minutes,
-      * messages can be at most 256KiB large,
+      * messages can be at most 1MiB large,
       * messages must be processed within 2 hours of being pulled,
         otherwise they will be redelivered.
 

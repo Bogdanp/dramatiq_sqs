@@ -25,6 +25,22 @@ def test_can_enqueue_and_process_messages(broker, worker, queue_name):
     # Then the db should contain that message
     assert db == [1]
 
+def test_can_enqueue_and_process_messages_close_to_size_limit(broker, worker, queue_name):
+    # Given that I have an actor that stores incoming messages in a database
+    db = []
+
+    @dramatiq.actor(queue_name=queue_name)
+    def do_work(x):
+        db.append(x)
+
+    # When I send that actor a message that is close to the size limit after base64 encoding
+    do_work.send("a" * 760 * 1024)
+
+    # And wait for it to be processed
+    time.sleep(1)
+
+    # Then the db should contain that message
+    assert db == ["a" * 760 * 1024]
 
 def test_limits_prefetch_while_if_queue_is_full(broker, worker, queue_name):
     # Given that I have an actor that stores incoming messages in a database
@@ -95,10 +111,10 @@ def test_cant_enqueue_messages_that_are_too_large(broker, queue_name):
     def do_work(s):
         pass
 
-    # When I attempt to send that actor a message that's too large
+    # When I attempt to send that actor a message that's too large after base64 encoding
     # Then a RuntimeError should be raised
     with pytest.raises(RuntimeError):
-        do_work.send("a" * 512 * 1024)
+        do_work.send("a" * 768 * 1024)
 
 
 def test_retention_period_is_validated():
