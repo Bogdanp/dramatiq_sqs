@@ -8,17 +8,22 @@ import boto3
 import dramatiq
 from dramatiq.logging import get_logger
 
+# SQS quotas:
+# https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/quotas-messages.html
+
 #: The max number of bytes in a message.
-MAX_MESSAGE_SIZE = 1024 * 1024
+MAX_MESSAGE_SIZE_BYTES = 1024 * 1024
 
 #: The min and max number of seconds messages may be retained for.
-MIN_MESSAGE_RETENTION = 60
-MAX_MESSAGE_RETENTION = 14 * 86400
+MIN_MESSAGE_RETENTION_SECONDS = 60
+MAX_MESSAGE_RETENTION_SECONDS = 14 * 86400
 
-#: The maximum amount of time SQS will wait before redelivering a
-#: message.  This is also the maximum amount of time that a message can
-#: be delayed for.
-MAX_VISIBILITY_TIMEOUT = 2 * 3600
+#: The maximum number of seconds SQS will wait for the message to be acked before
+#: redelivering it.
+MAX_VISIBILITY_TIMEOUT_SECONDS = 12 * 3600
+
+#: The maximum number of seconds a message can be delayed for.
+MAX_DELAY_SECONDS = 15 * 60
 
 #: The max number of messages that may be prefetched at a time.
 MAX_PREFETCH = 10
@@ -38,9 +43,9 @@ class SQSBroker(dramatiq.Broker):
     Redis and RMQ backends:
 
       * the max amount of time messages can be delayed by is 15 minutes,
-      * messages can be at most 1MiB large,
-      * messages must be processed within 2 hours of being pulled,
-        otherwise they will be redelivered.
+      * messages can be at most 1MiB large and
+      * messages must be processed within 12 hours of being pulled,
+      otherwise they will be redelivered.
 
     The backend uses boto3_ under the hood.  For details on how
     authorization works, check out its docs_.
@@ -65,7 +70,7 @@ class SQSBroker(dramatiq.Broker):
             self, *,
             namespace: Optional[str] = None,
             middleware: Optional[List[dramatiq.Middleware]] = None,
-            retention: int = MAX_MESSAGE_RETENTION,
+            retention: int = MAX_MESSAGE_RETENTION_SECONDS,
             dead_letter: bool = False,
             max_receives: int = MAX_RECEIVES,
             tags: Optional[Dict[str, str]] = None,
@@ -73,8 +78,11 @@ class SQSBroker(dramatiq.Broker):
     ) -> None:
         super().__init__(middleware=middleware)
 
-        if retention < MIN_MESSAGE_RETENTION or retention > MAX_MESSAGE_RETENTION:
-            raise ValueError(f"'retention' must be between {MIN_MESSAGE_RETENTION} and {MAX_MESSAGE_RETENTION}.")
+        if (retention < MIN_MESSAGE_RETENTION_SECONDS or retention > MAX_MESSAGE_RETENTION_SECONDS):
+            raise ValueError(
+                f"'retention' must be between {MIN_MESSAGE_RETENTION_SECONDS} seconds and "
+                f"{MAX_MESSAGE_RETENTION_SECONDS} seconds."
+            )
 
         self.namespace: Optional[str] = namespace
         self.retention: str = str(retention)
@@ -143,20 +151,19 @@ class SQSBroker(dramatiq.Broker):
             self.logger.debug(f'Queue does not exist, creating queue with params: {kwargs}')
             return self.sqs.create_queue(**kwargs)
 
-    def enqueue(self, message: dramatiq.Message, *, delay: Optional[int] = None) -> dramatiq.Message:
+    def enqueue(self, message: dramatiq.Message, *, delay: Optional[int] = 0) -> dramatiq.Message:
         queue_name = message.queue_name
-        if delay is None:
-            queue = self.queues[queue_name]
-            delay_seconds = 0
-        elif delay <= 900000:
-            queue = self.queues[queue_name]
-            delay_seconds = int(delay / 1000)
-        else:
-            raise ValueError("Messages in SQS cannot be delayed for longer than 15 minutes.")
+        queue = self.queues[queue_name]
+        delay_seconds = int(delay / 1000)
+
+        if delay_seconds > MAX_DELAY_SECONDS:
+            raise ValueError(
+                f"Messages in SQS cannot be delayed for longer than {MAX_DELAY_SECONDS} seconds"
+            )
 
         encoded_message = b64encode(message.encode()).decode()
-        if len(encoded_message) > MAX_MESSAGE_SIZE:
-            raise RuntimeError("Messages in SQS can be at most 256KiB large.")
+        if len(encoded_message) > MAX_MESSAGE_SIZE_BYTES:
+            raise RuntimeError("Messages in SQS can be at most {MAX_MESSAGE_SIZE_BYTES} bytes")
 
         self.logger.debug("Enqueueing message %r on queue %r.", message.message_id, queue_name)
         self.emit_before("enqueue", message, delay)
@@ -179,7 +186,7 @@ class SQSConsumer(dramatiq.Consumer):
         self.logger = get_logger(__name__, type(self))
         self.queue = queue
         self.prefetch = min(prefetch, MAX_PREFETCH)
-        self.visibility_timeout = MAX_VISIBILITY_TIMEOUT
+        self.visibility_timeout = MAX_VISIBILITY_TIMEOUT_SECONDS
         self.timeout = timeout  # UNUSED
         self.messages: deque = deque()
         self.message_refc = 0

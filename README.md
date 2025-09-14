@@ -7,8 +7,8 @@ Redis and RMQ backends:
 
 * the max amount of time messages can be delayed by is 15 minutes,
 * messages can be at most 1MiB large and
-* messages must be processed within 2 hours of being pulled, otherwise
-  they will be redelivered.
+* messages must be processed within 12 hours of being pulled,
+otherwise they will be redelivered.
 
 The backend uses [boto3] under the hood.  For details on how
 authorization works, check out its [docs].
