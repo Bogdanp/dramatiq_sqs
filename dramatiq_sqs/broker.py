@@ -78,7 +78,7 @@ class SQSBroker(dramatiq.Broker):
     ) -> None:
         super().__init__(middleware=middleware)
 
-        if (retention < MIN_MESSAGE_RETENTION_SECONDS or retention > MAX_MESSAGE_RETENTION_SECONDS):
+        if retention < MIN_MESSAGE_RETENTION_SECONDS or retention > MAX_MESSAGE_RETENTION_SECONDS:
             raise ValueError(
                 f"'retention' must be between {MIN_MESSAGE_RETENTION_SECONDS} seconds and "
                 f"{MAX_MESSAGE_RETENTION_SECONDS} seconds."
@@ -151,10 +151,10 @@ class SQSBroker(dramatiq.Broker):
             self.logger.debug(f'Queue does not exist, creating queue with params: {kwargs}')
             return self.sqs.create_queue(**kwargs)
 
-    def enqueue(self, message: dramatiq.Message, *, delay: Optional[int] = 0) -> dramatiq.Message:
+    def enqueue(self, message: dramatiq.Message, *, delay: Optional[int] = None) -> dramatiq.Message:
         queue_name = message.queue_name
         queue = self.queues[queue_name]
-        delay_seconds = int(delay / 1000)
+        delay_seconds = (delay or 0) // 1000
 
         if delay_seconds > MAX_DELAY_SECONDS:
             raise ValueError(
