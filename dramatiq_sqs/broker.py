@@ -28,8 +28,9 @@ MAX_DELAY_SECONDS = 15 * 60
 #: The max number of messages that may be prefetched at a time.
 MAX_PREFETCH = 10
 
-#: The min value for WaitTimeSeconds.
-MIN_TIMEOUT = int(os.getenv("DRAMATIQ_SQS_MIN_TIMEOUT", "20"))
+#: The max value for WaitTimeSeconds.
+#: https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-short-and-long-polling.html#sqs-long-polling
+MAX_WAIT_TIME_SECONDS = 20
 
 #: The number of times a message will be received before being added
 #: to the dead-letter queue (if enabled).
@@ -187,7 +188,14 @@ class SQSConsumer(dramatiq.Consumer):
         self.queue = queue
         self.prefetch = min(prefetch, MAX_PREFETCH)
         self.visibility_timeout = MAX_VISIBILITY_TIMEOUT_SECONDS
-        self.timeout = timeout  # UNUSED
+        self.wait_time_seconds = timeout // 1000
+
+        if self.wait_time_seconds > MAX_WAIT_TIME_SECONDS:
+            raise ValueError(
+                f"The consumer timeout of {self.wait_time_seconds} is higher than "
+                f"the maximum supported ({MAX_WAIT_TIME_SECONDS})."
+            )
+
         self.messages: deque = deque()
         self.message_refc = 0
 
@@ -221,7 +229,7 @@ class SQSConsumer(dramatiq.Consumer):
     def __next__(self) -> Optional[dramatiq.Message]:
         kw = {
             "MaxNumberOfMessages": self.prefetch,
-            "WaitTimeSeconds": MIN_TIMEOUT,
+            "WaitTimeSeconds": self.wait_time_seconds,
         }
         if self.visibility_timeout is not None:
             kw["VisibilityTimeout"] = self.visibility_timeout
