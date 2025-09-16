@@ -158,12 +158,12 @@ class SQSBroker(dramatiq.Broker):
 
         if delay_seconds > MAX_DELAY_SECONDS:
             raise ValueError(
-                f"Messages in SQS cannot be delayed for longer than {MAX_DELAY_SECONDS} seconds"
+                f"Messages in SQS cannot be delayed for longer than {MAX_DELAY_SECONDS} seconds."
             )
 
         encoded_message = b64encode(message.encode()).decode()
         if len(encoded_message) > MAX_MESSAGE_SIZE_BYTES:
-            raise RuntimeError("Messages in SQS can be at most {MAX_MESSAGE_SIZE_BYTES} bytes")
+            raise RuntimeError("Messages in SQS can be at most {MAX_MESSAGE_SIZE_BYTES} bytes large.")
 
         self.logger.debug("Enqueueing message %r on queue %r.", message.message_id, queue_name)
         self.emit_before("enqueue", message, delay)
