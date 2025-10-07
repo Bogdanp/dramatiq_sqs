@@ -1,5 +1,4 @@
 import json
-import os
 from base64 import b64decode, b64encode
 from collections import deque
 from typing import Any, Dict, Iterable, List, Optional, Sequence, TypeVar
@@ -43,10 +42,13 @@ class SQSBroker(dramatiq.Broker):
     This backend has a number of limitations compared to the built-in
     Redis and RMQ backends:
 
-      * the max amount of time messages can be delayed by is 15 minutes,
+      * the max amount of time messages can be delayed by is 15 minutes (not applicable to FIFO queues),
       * messages can be at most 1MiB large and
       * messages must be processed within 12 hours of being pulled,
       otherwise they will be redelivered.
+      * FIFO queues are supported. Queue names ending in ``.fifo`` are treated
+      as FIFO queues. They provide ordered, exactly-once processing but do
+      not support message delays.
 
     The backend uses boto3_ under the hood.  For details on how
     authorization works, check out its docs_.
@@ -59,6 +61,9 @@ class SQSBroker(dramatiq.Broker):
       dead_letter: Whether to add a dead-letter queue. Defaults to false.
       max_receives: The number of times a message should be received before
         being added to the dead-letter queue. Defaults to MAX_RECEIVES.
+      content_based_deduplication: When creating new FIFO queues, whether
+        to enable content-based deduplication. Defaults to false.
+      tags: A dictionary of tags to apply to created queues.
       **options: Additional options that are passed to boto3.
 
     .. _Dramatiq: https://dramatiq.io
@@ -68,18 +73,23 @@ class SQSBroker(dramatiq.Broker):
     """
 
     def __init__(
-            self, *,
-            namespace: Optional[str] = None,
-            middleware: Optional[List[dramatiq.Middleware]] = None,
-            retention: int = MAX_MESSAGE_RETENTION_SECONDS,
-            dead_letter: bool = False,
-            max_receives: int = MAX_RECEIVES,
-            tags: Optional[Dict[str, str]] = None,
-            **options,
+        self,
+        *,
+        namespace: Optional[str] = None,
+        middleware: Optional[List[dramatiq.Middleware]] = None,
+        retention: int = MAX_MESSAGE_RETENTION_SECONDS,
+        dead_letter: bool = False,
+        max_receives: int = MAX_RECEIVES,
+        tags: Optional[Dict[str, str]] = None,
+        content_based_deduplication: bool = False,
+        **options,
     ) -> None:
         super().__init__(middleware=middleware)
 
-        if retention < MIN_MESSAGE_RETENTION_SECONDS or retention > MAX_MESSAGE_RETENTION_SECONDS:
+        if (
+            retention < MIN_MESSAGE_RETENTION_SECONDS
+            or retention > MAX_MESSAGE_RETENTION_SECONDS
+        ):
             raise ValueError(
                 f"'retention' must be between {MIN_MESSAGE_RETENTION_SECONDS} seconds and "
                 f"{MAX_MESSAGE_RETENTION_SECONDS} seconds."
@@ -88,16 +98,20 @@ class SQSBroker(dramatiq.Broker):
         self.namespace: Optional[str] = namespace
         self.retention: str = str(retention)
         self.queues: Dict[str, Any] = {}
+        self.queue_attributes: Dict[str, Dict[str, str]] = {}
         self.dead_letter: bool = dead_letter
         self.max_receives: int = max_receives
         self.tags: Optional[Dict[str, str]] = tags
+        self.content_based_deduplication: bool = content_based_deduplication
         self.sqs: Any = boto3.resource("sqs", **options)
 
     @property
     def consumer_class(self):
         return SQSConsumer
 
-    def consume(self, queue_name: str, prefetch: int = 1, timeout: int = 30000) -> dramatiq.Consumer:
+    def consume(
+        self, queue_name: str, prefetch: int = 1, timeout: int = 30000
+    ) -> dramatiq.Consumer:
         try:
             return self.consumer_class(self.queues[queue_name], prefetch, timeout)
         except KeyError:  # pragma: no cover
@@ -114,48 +128,74 @@ class SQSBroker(dramatiq.Broker):
 
             self.emit_before("declare_queue", queue_name)
 
-            self.queues[queue_name] = self._get_or_create_queue(
+            is_fifo = queue_name.endswith(".fifo")
+            attributes: Dict[str, str] = {
+                "MessageRetentionPeriod": self.retention,
+            }
+            if is_fifo:
+                attributes["FifoQueue"] = "true"
+                if self.content_based_deduplication:
+                    attributes["ContentBasedDeduplication"] = "true"
+
+            queue = self._get_or_create_queue(
                 QueueName=prefixed_queue_name,
-                Attributes={
-                    "MessageRetentionPeriod": self.retention,
-                }
+                Attributes=attributes,
             )
+            self.queues[queue_name] = queue
+            self.queue_attributes[queue_name] = queue.attributes
+
             if self.tags:
                 self.sqs.meta.client.tag_queue(
-                    QueueUrl=self.queues[queue_name].url,
-                    Tags=self.tags
+                    QueueUrl=self.queues[queue_name].url, Tags=self.tags
                 )
 
             if self.dead_letter:
-                dead_letter_queue_name = f"{prefixed_queue_name}_dlq"
+                dlq_attributes: Dict[str, str] = {}
+                if is_fifo:
+                    # SQS requires FIFO queue names to end with '.fifo'
+                    base_name = prefixed_queue_name[:-5]  # remove '.fifo'
+                    dead_letter_queue_name = f"{base_name}_dlq.fifo"
+                    dlq_attributes["FifoQueue"] = "true"
+                else:
+                    dead_letter_queue_name = f"{prefixed_queue_name}_dlq"
+
                 dead_letter_queue = self._get_or_create_queue(
-                    QueueName=dead_letter_queue_name
+                    QueueName=dead_letter_queue_name, Attributes=dlq_attributes
                 )
                 if self.tags:
                     self.sqs.meta.client.tag_queue(
-                        QueueUrl=dead_letter_queue.url,
-                        Tags=self.tags
+                        QueueUrl=dead_letter_queue.url, Tags=self.tags
                     )
                 redrive_policy = {
                     "deadLetterTargetArn": dead_letter_queue.attributes["QueueArn"],
-                    "maxReceiveCount": str(self.max_receives)
+                    "maxReceiveCount": str(self.max_receives),
                 }
-                self.queues[queue_name].set_attributes(Attributes={
-                    "RedrivePolicy": json.dumps(redrive_policy)
-                })
+                self.queues[queue_name].set_attributes(
+                    Attributes={"RedrivePolicy": json.dumps(redrive_policy)}
+                )
             self.emit_after("declare_queue", queue_name)
 
     def _get_or_create_queue(self, **kwargs) -> Any:
         try:
-            return self.sqs.get_queue_by_name(QueueName=kwargs['QueueName'])
+            return self.sqs.get_queue_by_name(QueueName=kwargs["QueueName"])
         except self.sqs.meta.client.exceptions.QueueDoesNotExist:
-            self.logger.debug(f'Queue does not exist, creating queue with params: {kwargs}')
+            self.logger.debug(
+                f"Queue does not exist, creating queue with params: {kwargs}"
+            )
             return self.sqs.create_queue(**kwargs)
 
-    def enqueue(self, message: dramatiq.Message, *, delay: Optional[int] = None) -> dramatiq.Message:
+    def enqueue(
+        self, message: dramatiq.Message, *, delay: Optional[int] = None
+    ) -> dramatiq.Message:
         queue_name = message.queue_name
         queue = self.queues[queue_name]
         delay_seconds = (delay or 0) // 1000
+
+        queue_attrs = self.queue_attributes.get(queue_name, {})
+        is_fifo = queue_attrs.get("FifoQueue") == "true"
+
+        if is_fifo and delay_seconds > 0:
+            raise ValueError("SQS FIFO queues do not support message delays.")
 
         if delay_seconds > MAX_DELAY_SECONDS:
             raise ValueError(
@@ -163,15 +203,37 @@ class SQSBroker(dramatiq.Broker):
             )
 
         encoded_message = b64encode(message.encode()).decode()
-        if len(encoded_message) > MAX_MESSAGE_SIZE_BYTES:
-            raise RuntimeError("Messages in SQS can be at most {MAX_MESSAGE_SIZE_BYTES} bytes large.")
+        if len(encoded_message.encode("utf-8")) > MAX_MESSAGE_SIZE_BYTES:
+            raise RuntimeError(
+                f"Messages in SQS can be at most {MAX_MESSAGE_SIZE_BYTES} bytes large."
+            )
 
-        self.logger.debug("Enqueueing message %r on queue %r.", message.message_id, queue_name)
-        self.emit_before("enqueue", message, delay)
-        queue.send_message(
-            MessageBody=encoded_message,
-            DelaySeconds=delay_seconds,
+        self.logger.debug(
+            "Enqueueing message %r on queue %r.", message.message_id, queue_name
         )
+        self.emit_before("enqueue", message, delay)
+
+        send_params: Dict[str, Any] = {
+            "MessageBody": encoded_message,
+        }
+        if is_fifo:
+            message_group_id = message.options.get("message_group_id")
+            if not message_group_id:
+                raise ValueError(
+                    "Messages sent to a FIFO queue must have a 'message_group_id'."
+                )
+            send_params["MessageGroupId"] = message_group_id
+
+            # SQS requires a deduplication ID for FIFO queues unless content-based deduplication is enabled.
+            # To be robust, we provide one based on the message ID if not given by the user.
+            message_deduplication_id = message.options.get(
+                "message_deduplication_id", message.message_id
+            )
+            send_params["MessageDeduplicationId"] = message_deduplication_id
+        else:
+            send_params["DelaySeconds"] = delay_seconds
+
+        queue.send_message(**send_params)
         self.emit_after("enqueue", message, delay)
         return message
 
@@ -209,20 +271,34 @@ class SQSConsumer(dramatiq.Consumer):
     def requeue(self, messages: Iterable["_SQSMessage"]) -> None:
         for batch in chunk(messages, chunksize=10):
             # Re-enqueue batches of up to 10 messages.
-            send_response = self.queue.send_messages(Entries=[{
-                "Id": str(i),
-                "MessageBody": message._sqs_message.body,
-            } for i, message in enumerate(batch)])
+            send_response = self.queue.send_messages(
+                Entries=[
+                    {
+                        "Id": str(i),
+                        "MessageBody": message._sqs_message.body,
+                    }
+                    for i, message in enumerate(batch)
+                ]
+            )
 
             # Then delete the ones that were successfully re-enqueued.
             # The rest will have to wait until their visibility
             # timeout expires.
-            failed_message_ids = [int(res["Id"]) for res in send_response.get("Failed", [])]
-            requeued_messages = [m for i, m in enumerate(batch) if i not in failed_message_ids]
-            self.queue.delete_messages(Entries=[{
-                "Id": str(i),
-                "ReceiptHandle": message._sqs_message.receipt_handle,
-            } for i, message in enumerate(requeued_messages)])
+            failed_message_ids = [
+                int(res["Id"]) for res in send_response.get("Failed", [])
+            ]
+            requeued_messages = [
+                m for i, m in enumerate(batch) if i not in failed_message_ids
+            ]
+            self.queue.delete_messages(
+                Entries=[
+                    {
+                        "Id": str(i),
+                        "ReceiptHandle": message._sqs_message.receipt_handle,
+                    }
+                    for i, message in enumerate(requeued_messages)
+                ]
+            )
 
             self.message_refc -= len(requeued_messages)
 
@@ -245,7 +321,9 @@ class SQSConsumer(dramatiq.Consumer):
                         self.messages.append(_SQSMessage(sqs_message, dramatiq_message))
                         self.message_refc += 1
                     except Exception:  # pragma: no cover
-                        self.logger.exception("Failed to decode message: %r", sqs_message.body)
+                        self.logger.exception(
+                            "Failed to decode message: %r", sqs_message.body
+                        )
 
             try:
                 return self.messages.popleft()
@@ -264,8 +342,7 @@ T = TypeVar("T")
 
 
 def chunk(xs: Iterable[T], *, chunksize=10) -> Iterable[Sequence[T]]:
-    """Split a sequence into subseqs of chunksize length.
-    """
+    """Split a sequence into subseqs of chunksize length."""
     chunk = []
     for x in xs:
         chunk.append(x)

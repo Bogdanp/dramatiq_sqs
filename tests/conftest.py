@@ -4,8 +4,7 @@ import uuid
 
 import dramatiq
 import pytest
-from dramatiq.middleware import (AgeLimit, Callbacks, Pipelines, Retries,
-                                 TimeLimit)
+from dramatiq.middleware import AgeLimit, Callbacks, Pipelines, Retries, TimeLimit
 
 from dramatiq_sqs import SQSBroker
 
@@ -39,6 +38,11 @@ def broker():
 @pytest.fixture
 def queue_name(broker):
     return f"queue_{uuid.uuid4()}"
+
+
+@pytest.fixture
+def fifo_queue_name(broker):
+    return f"queue_{uuid.uuid4()}.fifo"
 
 
 @pytest.fixture
