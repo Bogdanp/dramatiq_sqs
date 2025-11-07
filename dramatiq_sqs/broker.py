@@ -74,6 +74,7 @@ class SQSBroker(dramatiq.Broker):
             retention: int = MAX_MESSAGE_RETENTION_SECONDS,
             dead_letter: bool = False,
             max_receives: int = MAX_RECEIVES,
+            visibility_timeout: Optional[int] = MAX_VISIBILITY_TIMEOUT_SECONDS,
             tags: Optional[Dict[str, str]] = None,
             **options,
     ) -> None:
@@ -90,6 +91,7 @@ class SQSBroker(dramatiq.Broker):
         self.queues: Dict[str, Any] = {}
         self.dead_letter: bool = dead_letter
         self.max_receives: int = max_receives
+        self.visibility_timeout = visibility_timeout
         self.tags: Optional[Dict[str, str]] = tags
         self.sqs: Any = boto3.resource("sqs", **options)
 
@@ -99,7 +101,12 @@ class SQSBroker(dramatiq.Broker):
 
     def consume(self, queue_name: str, prefetch: int = 1, timeout: int = 30000) -> dramatiq.Consumer:
         try:
-            return self.consumer_class(self.queues[queue_name], prefetch, timeout)
+            return self.consumer_class(
+                self.queues[queue_name],
+                prefetch,
+                timeout,
+                visibility_timeout=self.visibility_timeout
+            )
         except KeyError:  # pragma: no cover
             raise dramatiq.QueueNotFound(queue_name)
 
@@ -183,11 +190,26 @@ class SQSBroker(dramatiq.Broker):
 
 
 class SQSConsumer(dramatiq.Consumer):
-    def __init__(self, queue: Any, prefetch: int, timeout: int) -> None:
+    def __init__(
+        self, 
+        queue: Any, 
+        prefetch: int, 
+        timeout: int, *, 
+        visibility_timeout: Optional[int] = None,
+    ) -> None:
         self.logger = get_logger(__name__, type(self))
         self.queue = queue
         self.prefetch = min(prefetch, MAX_PREFETCH)
-        self.visibility_timeout = MAX_VISIBILITY_TIMEOUT_SECONDS
+        
+        self.visibility_timeout = visibility_timeout
+
+        if self.visibility_timeout is not None and self.visibility_timeout > MAX_VISIBILITY_TIMEOUT_SECONDS:
+            raise ValueError(
+                f"The message visibility timeout of {self.visibility_timeout} is higher than "
+                f"the maximum supported ({MAX_VISIBILITY_TIMEOUT_SECONDS})."
+            )
+
+
         self.wait_time_seconds = timeout // 1000
 
         if self.wait_time_seconds > MAX_WAIT_TIME_SECONDS:
