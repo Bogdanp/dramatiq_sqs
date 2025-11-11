@@ -1,6 +1,9 @@
-name: pull_request
+name: check
 
 on:
+  push:
+    branches: [master]
+
   pull_request:
     types: [opened, reopened, synchronize]
 
