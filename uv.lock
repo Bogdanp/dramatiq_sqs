@@ -157,7 +157,7 @@ wheels = [
 
 [[package]]
 name = "dramatiq-sqs"
-version = "0.3.0.dev2"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },
