@@ -25,7 +25,7 @@ dependencies = ["boto3", "dramatiq"]
 Repository = "https://github.com/Bogdanp/dramatiq_sqs"
 
 [dependency-groups]
-dev = ["flake8", "flake8-quotes", "isort", "mypy", "pytest", "pytest-cov"]
+dev = ["ruff", "mypy", "pytest", "pytest-cov"]
 
 [build-system]
 requires = ["uv_build>=0.9.8,<0.10.0"]
@@ -33,3 +33,8 @@ build-backend = "uv_build"
 
 [tool.uv]
 required-version = ">=0.9.8"
+
+[tool.ruff.lint]
+extend-select = [
+    "I", # isort
+]
