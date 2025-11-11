@@ -77,8 +77,7 @@ Here are the IAM permissions needed by Dramatiq:
 
 ## License
 
-dramatiq_sqs is licensed under Apache 2.0.  Please see
-[LICENSE] for licensing details.
+`dramatiq_sqs` is licensed under Apache 2.0.
 
 
 [Dramatiq]: https://dramatiq.io
