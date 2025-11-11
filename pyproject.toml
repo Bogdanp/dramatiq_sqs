@@ -25,7 +25,15 @@ dependencies = ["boto3", "dramatiq"]
 Repository = "https://github.com/Bogdanp/dramatiq_sqs"
 
 [dependency-groups]
-dev = ["nox", "nox-uv", "ruff", "mypy", "pytest", "pytest-cov"]
+dev = [
+    "boto3-stubs[boto3,sqs]",
+    "mypy",
+    "nox-uv",
+    "nox",
+    "pytest-cov",
+    "pytest",
+    "ruff",
+]
 
 [build-system]
 requires = ["uv_build>=0.9.8,<0.10.0"]
@@ -33,10 +41,6 @@ build-backend = "uv_build"
 
 [tool.uv]
 required-version = ">=0.9.8"
-
-[[tool.mypy.overrides]]
-module = ["boto3.*", "botocore.*"]
-ignore_missing_imports = true
 
 [tool.pytest]
 testpaths = ["tests"]
