@@ -38,6 +38,9 @@ required-version = ">=0.9.8"
 module = ["boto3.*", "botocore.*"]
 ignore_missing_imports = true
 
+[tool.pytest]
+testpaths = ["tests"]
+addopts = ["--cov", "src/dramatiq_sqs", "--cov-report", "html"]
 
 [tool.ruff.lint]
 extend-select = [
