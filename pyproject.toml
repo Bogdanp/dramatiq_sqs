@@ -1,0 +1,35 @@
+[project]
+name = "dramatiq-sqs"
+description = "An Amazon SQS broker for Dramatiq."
+license = "Apache-2.0"
+keywords = ["dramatiq", "sqs"]
+readme = "README.md"
+authors = [{ name = "Bogdan Paul Popa" }, { name = "Mikhail Bulash" }]
+maintainers = [{ name = "Mikhail Bulash" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: System :: Distributed Computing",
+]
+version = "0.3.0.dev2"
+requires-python = ">=3.10"
+dependencies = ["boto3", "dramatiq"]
+
+[project.urls]
+Repository = "https://github.com/Bogdanp/dramatiq_sqs"
+
+[dependency-groups]
+dev = ["flake8", "flake8-quotes", "isort", "mypy", "pytest", "pytest-cov"]
+
+[build-system]
+requires = ["uv_build>=0.9.8,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.uv]
+required-version = ">=0.9.8"
