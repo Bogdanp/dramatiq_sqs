@@ -9,12 +9,4 @@ def test_chunk_can_split_iterators_into_chunks():
     chunks = chunk(xs, chunksize=2)
 
     # Then I should get back these chunks
-    assert list(chunks) == [
-        [0, 1],
-        [2, 3],
-        [4, 5],
-        [6, 7],
-        [8, 9],
-        [10, 11],
-        [12]
-    ]
+    assert list(chunks) == [[0, 1], [2, 3], [4, 5], [6, 7], [8, 9], [10, 11], [12]]

@@ -4,8 +4,7 @@ import uuid
 
 import dramatiq
 import pytest
-from dramatiq.middleware import (AgeLimit, Callbacks, Pipelines, Retries,
-                                 TimeLimit)
+from dramatiq.middleware import AgeLimit, Callbacks, Pipelines, Retries, TimeLimit
 
 from dramatiq_sqs import SQSBroker
 

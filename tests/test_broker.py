@@ -25,7 +25,10 @@ def test_can_enqueue_and_process_messages(broker, worker, queue_name):
     # Then the db should contain that message
     assert db == [1]
 
-def test_can_enqueue_and_process_messages_close_to_size_limit(broker, worker, queue_name):
+
+def test_can_enqueue_and_process_messages_close_to_size_limit(
+    broker, worker, queue_name
+):
     # Given that I have an actor that stores incoming messages in a database
     db = []
 
@@ -41,6 +44,7 @@ def test_can_enqueue_and_process_messages_close_to_size_limit(broker, worker, qu
 
     # Then the db should contain that message
     assert db == ["a" * 760 * 1024]
+
 
 def test_limits_prefetch_while_if_queue_is_full(broker, worker, queue_name):
     # Given that I have an actor that stores incoming messages in a database
@@ -156,36 +160,41 @@ def test_creates_dead_letter_queue():
     # And I've stubbed out all the relevant API calls
     stubber = Stubber(broker.sqs.meta.client)
     error_response = {
-        'Error': {
-            'Code': 'AWS.SimpleQueueService.QueueDoesNotExist',
-            'Message': 'The specified queue does not exist.'
+        "Error": {
+            "Code": "AWS.SimpleQueueService.QueueDoesNotExist",
+            "Message": "The specified queue does not exist.",
         }
     }
     stubber.add_client_error(
         "get_queue_url",
         http_status_code=404,
-        service_error_code='QueueDoesNotExist',
-        service_message='The specified queue does not exist.',
-        response_meta=error_response)
+        service_error_code="QueueDoesNotExist",
+        service_message="The specified queue does not exist.",
+        response_meta=error_response,
+    )
     stubber.add_response("create_queue", {"QueueUrl": ""})
     stubber.add_client_error(
         "get_queue_url",
         http_status_code=404,
-        service_error_code='QueueDoesNotExist',
-        service_message='The specified queue does not exist.',
-        response_meta=error_response)
+        service_error_code="QueueDoesNotExist",
+        service_message="The specified queue does not exist.",
+        response_meta=error_response,
+    )
 
     stubber.add_response("create_queue", {"QueueUrl": ""})
     stubber.add_response("get_queue_attributes", {"Attributes": {"QueueArn": "dlq"}})
-    stubber.add_response("set_queue_attributes", {}, {
-        "QueueUrl": "",
-        "Attributes": {
-            "RedrivePolicy": json.dumps({
-                "deadLetterTargetArn": "dlq",
-                "maxReceiveCount": "20"
-            })
-        }
-    })
+    stubber.add_response(
+        "set_queue_attributes",
+        {},
+        {
+            "QueueUrl": "",
+            "Attributes": {
+                "RedrivePolicy": json.dumps(
+                    {"deadLetterTargetArn": "dlq", "maxReceiveCount": "20"}
+                )
+            },
+        },
+    )
 
     # When I create a queue
     # Then a dead-letter queue should be created
@@ -198,32 +207,28 @@ def test_creates_dead_letter_queue():
 def test_tags_queues_on_create():
     # Given that I have an SQS broker with tags
     broker = SQSBroker(
-        namespace="dramatiq_sqs_tests",
-        tags={"key1": "value1", "key2": "value2"}
+        namespace="dramatiq_sqs_tests", tags={"key1": "value1", "key2": "value2"}
     )
 
     # And I've stubbed out all the relevant API calls
     stubber = Stubber(broker.sqs.meta.client)
     error_response = {
-        'Error': {
-            'Code': 'AWS.SimpleQueueService.QueueDoesNotExist',
-            'Message': 'The specified queue does not exist.'
+        "Error": {
+            "Code": "AWS.SimpleQueueService.QueueDoesNotExist",
+            "Message": "The specified queue does not exist.",
         }
     }
     stubber.add_client_error(
         "get_queue_url",
         http_status_code=404,
-        service_error_code='QueueDoesNotExist',
-        service_message='The specified queue does not exist.',
-        response_meta=error_response)
+        service_error_code="QueueDoesNotExist",
+        service_message="The specified queue does not exist.",
+        response_meta=error_response,
+    )
     stubber.add_response("create_queue", {"QueueUrl": ""})
-    stubber.add_response("tag_queue", {}, {
-        "QueueUrl": "",
-        "Tags": {
-            "key1": "value1",
-            "key2": "value2"
-        }
-    })
+    stubber.add_response(
+        "tag_queue", {}, {"QueueUrl": "", "Tags": {"key1": "value1", "key2": "value2"}}
+    )
 
     # When I create a queue
     # Then the queue should have the specified tags

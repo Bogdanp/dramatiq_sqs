@@ -67,19 +67,23 @@ class SQSBroker(dramatiq.Broker):
     """
 
     def __init__(
-            self, *,
-            namespace: Optional[str] = None,
-            middleware: Optional[List[dramatiq.Middleware]] = None,
-            retention: int = MAX_MESSAGE_RETENTION_SECONDS,
-            dead_letter: bool = False,
-            max_receives: int = MAX_RECEIVES,
-            visibility_timeout: Optional[int] = MAX_VISIBILITY_TIMEOUT_SECONDS,
-            tags: Optional[Dict[str, str]] = None,
-            **options,
+        self,
+        *,
+        namespace: Optional[str] = None,
+        middleware: Optional[List[dramatiq.Middleware]] = None,
+        retention: int = MAX_MESSAGE_RETENTION_SECONDS,
+        dead_letter: bool = False,
+        max_receives: int = MAX_RECEIVES,
+        visibility_timeout: Optional[int] = MAX_VISIBILITY_TIMEOUT_SECONDS,
+        tags: Optional[Dict[str, str]] = None,
+        **options,
     ) -> None:
         super().__init__(middleware=middleware)
 
-        if retention < MIN_MESSAGE_RETENTION_SECONDS or retention > MAX_MESSAGE_RETENTION_SECONDS:
+        if (
+            retention < MIN_MESSAGE_RETENTION_SECONDS
+            or retention > MAX_MESSAGE_RETENTION_SECONDS
+        ):
             raise ValueError(
                 f"'retention' must be between {MIN_MESSAGE_RETENTION_SECONDS} seconds and "
                 f"{MAX_MESSAGE_RETENTION_SECONDS} seconds."
@@ -98,13 +102,15 @@ class SQSBroker(dramatiq.Broker):
     def consumer_class(self):
         return SQSConsumer
 
-    def consume(self, queue_name: str, prefetch: int = 1, timeout: int = 30000) -> dramatiq.Consumer:
+    def consume(
+        self, queue_name: str, prefetch: int = 1, timeout: int = 30000
+    ) -> dramatiq.Consumer:
         try:
             return self.consumer_class(
                 self.queues[queue_name],
                 prefetch,
                 timeout,
-                visibility_timeout=self.visibility_timeout
+                visibility_timeout=self.visibility_timeout,
             )
         except KeyError:  # pragma: no cover
             raise dramatiq.QueueNotFound(queue_name)
@@ -124,12 +130,11 @@ class SQSBroker(dramatiq.Broker):
                 QueueName=prefixed_queue_name,
                 Attributes={
                     "MessageRetentionPeriod": self.retention,
-                }
+                },
             )
             if self.tags:
                 self.sqs.meta.client.tag_queue(
-                    QueueUrl=self.queues[queue_name].url,
-                    Tags=self.tags
+                    QueueUrl=self.queues[queue_name].url, Tags=self.tags
                 )
 
             if self.dead_letter:
@@ -139,26 +144,29 @@ class SQSBroker(dramatiq.Broker):
                 )
                 if self.tags:
                     self.sqs.meta.client.tag_queue(
-                        QueueUrl=dead_letter_queue.url,
-                        Tags=self.tags
+                        QueueUrl=dead_letter_queue.url, Tags=self.tags
                     )
                 redrive_policy = {
                     "deadLetterTargetArn": dead_letter_queue.attributes["QueueArn"],
-                    "maxReceiveCount": str(self.max_receives)
+                    "maxReceiveCount": str(self.max_receives),
                 }
-                self.queues[queue_name].set_attributes(Attributes={
-                    "RedrivePolicy": json.dumps(redrive_policy)
-                })
+                self.queues[queue_name].set_attributes(
+                    Attributes={"RedrivePolicy": json.dumps(redrive_policy)}
+                )
             self.emit_after("declare_queue", queue_name)
 
     def _get_or_create_queue(self, **kwargs) -> Any:
         try:
-            return self.sqs.get_queue_by_name(QueueName=kwargs['QueueName'])
+            return self.sqs.get_queue_by_name(QueueName=kwargs["QueueName"])
         except self.sqs.meta.client.exceptions.QueueDoesNotExist:
-            self.logger.debug(f'Queue does not exist, creating queue with params: {kwargs}')
+            self.logger.debug(
+                f"Queue does not exist, creating queue with params: {kwargs}"
+            )
             return self.sqs.create_queue(**kwargs)
 
-    def enqueue(self, message: dramatiq.Message, *, delay: Optional[int] = None) -> dramatiq.Message:
+    def enqueue(
+        self, message: dramatiq.Message, *, delay: Optional[int] = None
+    ) -> dramatiq.Message:
         queue_name = message.queue_name
         queue = self.queues[queue_name]
         delay_seconds = (delay or 0) // 1000
@@ -170,9 +178,13 @@ class SQSBroker(dramatiq.Broker):
 
         encoded_message = b64encode(message.encode()).decode()
         if len(encoded_message) > MAX_MESSAGE_SIZE_BYTES:
-            raise RuntimeError("Messages in SQS can be at most {MAX_MESSAGE_SIZE_BYTES} bytes large.")
+            raise RuntimeError(
+                "Messages in SQS can be at most {MAX_MESSAGE_SIZE_BYTES} bytes large."
+            )
 
-        self.logger.debug("Enqueueing message %r on queue %r.", message.message_id, queue_name)
+        self.logger.debug(
+            "Enqueueing message %r on queue %r.", message.message_id, queue_name
+        )
         self.emit_before("enqueue", message, delay)
         queue.send_message(
             MessageBody=encoded_message,
@@ -190,24 +202,27 @@ class SQSBroker(dramatiq.Broker):
 
 class SQSConsumer(dramatiq.Consumer):
     def __init__(
-        self, 
-        queue: Any, 
-        prefetch: int, 
-        timeout: int, *, 
+        self,
+        queue: Any,
+        prefetch: int,
+        timeout: int,
+        *,
         visibility_timeout: Optional[int] = None,
     ) -> None:
         self.logger = get_logger(__name__, type(self))
         self.queue = queue
         self.prefetch = min(prefetch, MAX_PREFETCH)
-        
+
         self.visibility_timeout = visibility_timeout
 
-        if self.visibility_timeout is not None and self.visibility_timeout > MAX_VISIBILITY_TIMEOUT_SECONDS:
+        if (
+            self.visibility_timeout is not None
+            and self.visibility_timeout > MAX_VISIBILITY_TIMEOUT_SECONDS
+        ):
             raise ValueError(
                 f"The message visibility timeout of {self.visibility_timeout} is higher than "
                 f"the maximum supported ({MAX_VISIBILITY_TIMEOUT_SECONDS})."
             )
-
 
         self.wait_time_seconds = timeout // 1000
 
@@ -230,11 +245,16 @@ class SQSConsumer(dramatiq.Consumer):
     def requeue(self, messages: Iterable["_SQSMessage"]) -> None:
         for batch in chunk(messages, chunksize=10):
             # Setting the VisibilityTimeout to 0 makes the messages immediately visible again.
-            response = self.queue.change_message_visibility_batch(Entries=[{
-                "Id": str(i),
-                "ReceiptHandle": message._sqs_message.receipt_handle,
-                "VisibilityTimeout": 0,
-            } for i, message in enumerate(batch)])
+            response = self.queue.change_message_visibility_batch(
+                Entries=[
+                    {
+                        "Id": str(i),
+                        "ReceiptHandle": message._sqs_message.receipt_handle,
+                        "VisibilityTimeout": 0,
+                    }
+                    for i, message in enumerate(batch)
+                ]
+            )
 
             requeued_messages = response.get("Successful", [])
             self.message_refc -= len(requeued_messages)
@@ -258,7 +278,9 @@ class SQSConsumer(dramatiq.Consumer):
                         self.messages.append(_SQSMessage(sqs_message, dramatiq_message))
                         self.message_refc += 1
                     except Exception:  # pragma: no cover
-                        self.logger.exception("Failed to decode message: %r", sqs_message.body)
+                        self.logger.exception(
+                            "Failed to decode message: %r", sqs_message.body
+                        )
 
             try:
                 return self.messages.popleft()
@@ -277,8 +299,7 @@ T = TypeVar("T")
 
 
 def chunk(xs: Iterable[T], *, chunksize=10) -> Iterable[Sequence[T]]:
-    """Split a sequence into subseqs of chunksize length.
-    """
+    """Split a sequence into subseqs of chunksize length."""
     chunk = []
     for x in xs:
         chunk.append(x)
