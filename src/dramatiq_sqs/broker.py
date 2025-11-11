@@ -1,11 +1,14 @@
 import json
 from base64 import b64decode, b64encode
 from collections import deque
-from typing import Any, Dict, Iterable, List, Optional, Sequence, TypeVar
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Sequence, TypeVar
 
 import boto3
 import dramatiq
 from dramatiq.logging import get_logger
+
+if TYPE_CHECKING:
+    from mypy_boto3_sqs.service_resource import Message, Queue, SQSServiceResource
 
 # SQS quotas:
 # https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/quotas-messages.html
@@ -91,12 +94,12 @@ class SQSBroker(dramatiq.Broker):
 
         self.namespace: Optional[str] = namespace
         self.retention: str = str(retention)
-        self.queues: Dict[str, Any] = {}
+        self.queues: Dict[str, "Queue"] = {}
         self.dead_letter: bool = dead_letter
         self.max_receives: int = max_receives
         self.visibility_timeout = visibility_timeout
         self.tags: Optional[Dict[str, str]] = tags
-        self.sqs: Any = boto3.resource("sqs", **options)
+        self.sqs: "SQSServiceResource" = boto3.resource("sqs", **options)
 
     @property
     def consumer_class(self):
@@ -155,7 +158,7 @@ class SQSBroker(dramatiq.Broker):
                 )
             self.emit_after("declare_queue", queue_name)
 
-    def _get_or_create_queue(self, **kwargs) -> Any:
+    def _get_or_create_queue(self, **kwargs) -> "Queue":
         try:
             return self.sqs.get_queue_by_name(QueueName=kwargs["QueueName"])
         except self.sqs.meta.client.exceptions.QueueDoesNotExist:
@@ -203,7 +206,7 @@ class SQSBroker(dramatiq.Broker):
 class SQSConsumer(dramatiq.Consumer):
     def __init__(
         self,
-        queue: Any,
+        queue: "Queue",
         prefetch: int,
         timeout: int,
         *,
@@ -260,7 +263,7 @@ class SQSConsumer(dramatiq.Consumer):
             self.message_refc -= len(requeued_messages)
 
     def __next__(self) -> Optional[dramatiq.Message]:
-        kw = {
+        kw: dict[str, Any] = {
             "MaxNumberOfMessages": self.prefetch,
             "WaitTimeSeconds": self.wait_time_seconds,
         }
@@ -289,7 +292,7 @@ class SQSConsumer(dramatiq.Consumer):
 
 
 class _SQSMessage(dramatiq.MessageProxy):
-    def __init__(self, sqs_message: Any, message: dramatiq.Message) -> None:
+    def __init__(self, sqs_message: "Message", message: dramatiq.Message) -> None:
         super().__init__(message)
 
         self._sqs_message = sqs_message
