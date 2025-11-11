@@ -230,22 +230,14 @@ class SQSConsumer(dramatiq.Consumer):
 
     def requeue(self, messages: Iterable["_SQSMessage"]) -> None:
         for batch in chunk(messages, chunksize=10):
-            # Re-enqueue batches of up to 10 messages.
-            send_response = self.queue.send_messages(Entries=[{
-                "Id": str(i),
-                "MessageBody": message._sqs_message.body,
-            } for i, message in enumerate(batch)])
-
-            # Then delete the ones that were successfully re-enqueued.
-            # The rest will have to wait until their visibility
-            # timeout expires.
-            failed_message_ids = [int(res["Id"]) for res in send_response.get("Failed", [])]
-            requeued_messages = [m for i, m in enumerate(batch) if i not in failed_message_ids]
-            self.queue.delete_messages(Entries=[{
+            # Setting the VisibilityTimeout to 0 makes the messages immediately visible again.
+            response = self.queue.change_message_visibility_batch(Entries=[{
                 "Id": str(i),
                 "ReceiptHandle": message._sqs_message.receipt_handle,
-            } for i, message in enumerate(requeued_messages)])
+                "VisibilityTimeout": 0,
+            } for i, message in enumerate(batch)])
 
+            requeued_messages = response.get("Successful", [])
             self.message_refc -= len(requeued_messages)
 
     def __next__(self) -> Optional[dramatiq.Message]:
