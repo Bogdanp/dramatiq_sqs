@@ -25,7 +25,7 @@ dependencies = ["boto3", "dramatiq"]
 Repository = "https://github.com/Bogdanp/dramatiq_sqs"
 
 [dependency-groups]
-dev = ["ruff", "mypy", "pytest", "pytest-cov"]
+dev = ["nox", "nox-uv", "ruff", "mypy", "pytest", "pytest-cov"]
 
 [build-system]
 requires = ["uv_build>=0.9.8,<0.10.0"]
