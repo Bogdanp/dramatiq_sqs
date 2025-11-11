@@ -34,6 +34,11 @@ build-backend = "uv_build"
 [tool.uv]
 required-version = ">=0.9.8"
 
+[[tool.mypy.overrides]]
+module = ["boto3.*", "botocore.*"]
+ignore_missing_imports = true
+
+
 [tool.ruff.lint]
 extend-select = [
     "I", # isort
