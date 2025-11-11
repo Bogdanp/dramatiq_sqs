@@ -37,5 +37,5 @@ setup(
             "twine",
         ],
     },
-    python_requires=">=3.5",
+    python_requires=">=3.10",
 )
