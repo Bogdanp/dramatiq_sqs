@@ -1,7 +1,8 @@
 import json
 from base64 import b64decode, b64encode
 from collections import deque
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Sequence, TypeVar
+from collections.abc import Iterable, Sequence
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import boto3
 import dramatiq
@@ -72,13 +73,13 @@ class SQSBroker(dramatiq.Broker):
     def __init__(
         self,
         *,
-        namespace: Optional[str] = None,
-        middleware: Optional[List[dramatiq.Middleware]] = None,
+        namespace: str | None = None,
+        middleware: list[dramatiq.Middleware] | None = None,
         retention: int = MAX_MESSAGE_RETENTION_SECONDS,
         dead_letter: bool = False,
         max_receives: int = MAX_RECEIVES,
-        visibility_timeout: Optional[int] = MAX_VISIBILITY_TIMEOUT_SECONDS,
-        tags: Optional[Dict[str, str]] = None,
+        visibility_timeout: int | None = MAX_VISIBILITY_TIMEOUT_SECONDS,
+        tags: dict[str, str] | None = None,
         **options,
     ) -> None:
         super().__init__(middleware=middleware)
@@ -92,14 +93,14 @@ class SQSBroker(dramatiq.Broker):
                 f"{MAX_MESSAGE_RETENTION_SECONDS} seconds."
             )
 
-        self.namespace: Optional[str] = namespace
+        self.namespace: str | None = namespace
         self.retention: str = str(retention)
-        self.queues: Dict[str, "Queue"] = {}
+        self.queues: dict[str, Queue] = {}
         self.dead_letter: bool = dead_letter
         self.max_receives: int = max_receives
         self.visibility_timeout = visibility_timeout
-        self.tags: Optional[Dict[str, str]] = tags
-        self.sqs: "SQSServiceResource" = boto3.resource("sqs", **options)
+        self.tags: dict[str, str] | None = tags
+        self.sqs: SQSServiceResource = boto3.resource("sqs", **options)
 
     @property
     def consumer_class(self):
@@ -122,10 +123,7 @@ class SQSBroker(dramatiq.Broker):
         if queue_name not in self.queues:
             prefixed_queue_name = queue_name
             if self.namespace is not None:
-                prefixed_queue_name = "%(namespace)s_%(queue_name)s" % {
-                    "namespace": self.namespace,
-                    "queue_name": queue_name,
-                }
+                prefixed_queue_name = f"{self.namespace}_{queue_name}"
 
             self.emit_before("declare_queue", queue_name)
 
@@ -168,7 +166,7 @@ class SQSBroker(dramatiq.Broker):
             return self.sqs.create_queue(**kwargs)
 
     def enqueue(
-        self, message: dramatiq.Message, *, delay: Optional[int] = None
+        self, message: dramatiq.Message, *, delay: int | None = None
     ) -> dramatiq.Message:
         queue_name = message.queue_name
         queue = self.queues[queue_name]
@@ -210,7 +208,7 @@ class SQSConsumer(dramatiq.Consumer):
         prefetch: int,
         timeout: int,
         *,
-        visibility_timeout: Optional[int] = None,
+        visibility_timeout: int | None = None,
     ) -> None:
         self.logger = get_logger(__name__, type(self))
         self.queue = queue
@@ -262,7 +260,7 @@ class SQSConsumer(dramatiq.Consumer):
             requeued_messages = response.get("Successful", [])
             self.message_refc -= len(requeued_messages)
 
-    def __next__(self) -> Optional[dramatiq.Message]:
+    def __next__(self) -> dramatiq.Message | None:
         kw: dict[str, Any] = {
             "MaxNumberOfMessages": self.prefetch,
             "WaitTimeSeconds": self.wait_time_seconds,
