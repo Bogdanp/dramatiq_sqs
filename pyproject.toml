@@ -7,15 +7,15 @@ readme = "README.md"
 authors = [{ name = "Bogdan Paul Popa" }, { name = "Mikhail Bulash" }]
 maintainers = [{ name = "Mikhail Bulash" }]
 classifiers = [
-    "Development Status :: 3 - Alpha",
-    "License :: OSI Approved :: Apache Software License",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
-    "Programming Language :: Python :: 3.14",
-    "Topic :: System :: Distributed Computing",
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: System :: Distributed Computing",
 ]
 version = "0.3.0"
 requires-python = ">=3.10"
@@ -26,13 +26,13 @@ Repository = "https://github.com/Bogdanp/dramatiq_sqs"
 
 [dependency-groups]
 dev = [
-    "boto3-stubs[boto3,sqs]",
-    "mypy",
-    "nox-uv",
-    "nox",
-    "pytest-cov",
-    "pytest",
-    "ruff",
+  "boto3-stubs[boto3,sqs]",
+  "mypy",
+  "nox-uv",
+  "nox",
+  "pytest-cov",
+  "pytest",
+  "ruff",
 ]
 
 [build-system]
@@ -48,5 +48,5 @@ addopts = ["--cov", "src/dramatiq_sqs", "--cov-report", "html"]
 
 [tool.ruff.lint]
 extend-select = [
-    "I", # isort
+  "I", # isort
 ]
