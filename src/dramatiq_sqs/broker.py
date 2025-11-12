@@ -107,7 +107,10 @@ class SQSBroker(dramatiq.Broker):
         return SQSConsumer
 
     def consume(
-        self, queue_name: str, prefetch: int = 1, timeout: int = 30000
+        self,
+        queue_name: str,
+        prefetch: int = 1,
+        timeout: int = MAX_WAIT_TIME_SECONDS * 1000,
     ) -> dramatiq.Consumer:
         try:
             return self.consumer_class(
