@@ -1,21 +1,27 @@
-import logging
-import random
 import uuid
+from collections.abc import Iterator
+from pathlib import Path
 
 import dramatiq
 import pytest
 from dramatiq.middleware import AgeLimit, Callbacks, Pipelines, Retries, TimeLimit
+from pytest_docker import Services
 
 from dramatiq_sqs import SQSBroker
 
-logfmt = "[%(asctime)s] [%(threadName)s] [%(name)s] [%(levelname)s] %(message)s"
-logging.basicConfig(level=logging.DEBUG, format=logfmt)
-logging.getLogger("botocore").setLevel(logging.WARN)
-random.seed(1337)
+
+@pytest.fixture(scope="session")
+def docker_compose_file() -> str:
+    return str(Path(__file__).parent / "compose.yaml")
+
+
+@pytest.fixture(scope="session")
+def elasticmq_endpoint_url(docker_ip: str, docker_services: Services) -> str:
+    return "http://{}:{}".format(docker_ip, docker_services.port_for("elasticmq", 9324))
 
 
 @pytest.fixture
-def broker():
+def broker(elasticmq_endpoint_url: str) -> Iterator[SQSBroker]:
     broker = SQSBroker(
         namespace="dramatiq_sqs_tests",
         middleware=[
@@ -28,6 +34,10 @@ def broker():
         tags={
             "owner": "dramatiq_sqs_tests",
         },
+        region_name="eu-central-1",
+        endpoint_url=elasticmq_endpoint_url,
+        aws_access_key_id="000000000000",
+        aws_secret_access_key="000000000000",
     )
     dramatiq.set_broker(broker)
     yield broker
