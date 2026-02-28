@@ -13,8 +13,8 @@ def ruff(session: Session) -> None:
 
 
 @session(uv_groups=["dev"])
-def mypy(session: Session) -> None:
-    session.run("mypy", "src/", "tests/")
+def ty(session: Session) -> None:
+    session.run("ty", "check")
 
 
 @session(uv_groups=["dev"], python=PYTHONS)

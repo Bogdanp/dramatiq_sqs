@@ -14,7 +14,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v6
 
-      - run: uv run nox -s ruff mypy
+      - run: uv run nox -s ruff ty
 
   pytest:
     runs-on: ubuntu-latest
