@@ -27,21 +27,21 @@ Repository = "https://github.com/Bogdanp/dramatiq_sqs"
 [dependency-groups]
 dev = [
   "boto3-stubs[boto3,sqs]",
-  "mypy",
   "nox-uv",
   "nox",
   "pytest-cov",
   "pytest-docker",
   "pytest",
   "ruff",
+  "ty",
 ]
 
 [build-system]
-requires = ["uv_build>=0.9.8,<0.10.0"]
+requires = ["uv_build>=0.10.7,<0.11.0"]
 build-backend = "uv_build"
 
 [tool.uv]
-required-version = ">=0.9.8"
+required-version = ">=0.10.7"
 
 [tool.pytest]
 testpaths = ["tests"]
@@ -52,3 +52,6 @@ extend-select = [
   "I",  # isort
   "UP", # pyupgrade
 ]
+
+[tool.ty.src]
+include = ["src", "tests"]
