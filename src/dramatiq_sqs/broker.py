@@ -1,4 +1,5 @@
 import json
+import time
 from base64 import b64decode, b64encode
 from collections import deque
 from collections.abc import Iterable, Sequence
@@ -6,6 +7,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 import boto3
 import dramatiq
+from dramatiq.errors import QueueJoinTimeout
 from dramatiq.logging import get_logger
 
 if TYPE_CHECKING:
@@ -196,6 +198,29 @@ class SQSBroker(dramatiq.Broker):
         )
         self.emit_after("enqueue", message, delay)
         return message
+
+    def join(self, queue_name: str, *, timeout: int | None = None) -> None:
+        queue = self.queues[queue_name]
+
+        deadline = timeout and time.monotonic() + timeout
+
+        while True:
+            if deadline and time.monotonic() >= deadline:
+                raise QueueJoinTimeout(queue_name)
+
+            queue.load()
+            message_count = sum(
+                (
+                    int(queue.attributes["ApproximateNumberOfMessages"]),
+                    int(queue.attributes["ApproximateNumberOfMessagesDelayed"]),
+                    int(queue.attributes["ApproximateNumberOfMessagesNotVisible"]),
+                )
+            )
+
+            if message_count == 0:
+                break
+
+            time.sleep(1)
 
     def get_declared_queues(self) -> Iterable[str]:
         return set(self.queues)

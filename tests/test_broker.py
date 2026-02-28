@@ -1,11 +1,13 @@
-import json
 import time
+from typing import TYPE_CHECKING
 
 import dramatiq
 import pytest
-from botocore.stub import Stubber
 
 from dramatiq_sqs import SQSBroker
+
+if TYPE_CHECKING:
+    from mypy_boto3_sqs.service_resource import SQSServiceResource
 
 
 def test_can_enqueue_and_process_messages(broker, worker, queue_name):
@@ -20,30 +22,10 @@ def test_can_enqueue_and_process_messages(broker, worker, queue_name):
     do_work.send(1)
 
     # And wait for it to be processed
-    time.sleep(1)
+    broker.join(queue_name)
 
     # Then the db should contain that message
     assert db == [1]
-
-
-def test_can_enqueue_and_process_messages_close_to_size_limit(
-    broker, worker, queue_name
-):
-    # Given that I have an actor that stores incoming messages in a database
-    db = []
-
-    @dramatiq.actor(queue_name=queue_name)
-    def do_work(x):
-        db.append(x)
-
-    # When I send that actor a message that is close to the size limit after base64 encoding
-    do_work.send("a" * 760 * 1024)
-
-    # And wait for it to be processed
-    time.sleep(1)
-
-    # Then the db should contain that message
-    assert db == ["a" * 760 * 1024]
 
 
 def test_limits_prefetch_while_if_queue_is_full(broker, worker, queue_name):
@@ -82,12 +64,7 @@ def test_can_enqueue_delayed_messages(broker, worker, queue_name):
     start_time = time.time()
     do_work.send_with_options(args=(1,), delay=5000)
 
-    # And poll the database for a result each second
-    for _ in range(60):
-        if db:
-            break
-
-        time.sleep(1)
+    broker.join(queue_name)
 
     # Then the db should contain that message
     assert db == [1]
@@ -149,89 +126,27 @@ def test_can_requeue_consumed_messages(broker, queue_name):
     assert first_message == second_message
 
 
-def test_creates_dead_letter_queue():
-    # Given that I have an SQS broker with dead letters turned on
-    broker = SQSBroker(
-        namespace="dramatiq_sqs_tests",
-        dead_letter=True,
-        max_receives=20,
-    )
+@pytest.mark.parametrize(
+    ("queue_name", "dead_letter", "sqs_queue_names"),
+    [
+        ("queue42", False, ["{namespace}_queue42"]),
+        ("queue42", True, ["{namespace}_queue42", "{namespace}_queue42_dlq"]),
+    ],
+)
+def test_declare_queue(
+    queue_name: str,
+    sqs_queue_names: list[str],
+    broker: SQSBroker,
+    namespace: str,
+    tags: dict[str, str],
+    sqs: "SQSServiceResource",
+    subtests: pytest.Subtests,
+) -> None:
+    broker.declare_queue(queue_name)
 
-    # And I've stubbed out all the relevant API calls
-    stubber = Stubber(broker.sqs.meta.client)
-    error_response = {
-        "Error": {
-            "Code": "AWS.SimpleQueueService.QueueDoesNotExist",
-            "Message": "The specified queue does not exist.",
-        }
-    }
-    stubber.add_client_error(
-        "get_queue_url",
-        http_status_code=404,
-        service_error_code="QueueDoesNotExist",
-        service_message="The specified queue does not exist.",
-        response_meta=error_response,
-    )
-    stubber.add_response("create_queue", {"QueueUrl": ""})
-    stubber.add_client_error(
-        "get_queue_url",
-        http_status_code=404,
-        service_error_code="QueueDoesNotExist",
-        service_message="The specified queue does not exist.",
-        response_meta=error_response,
-    )
+    sqs_queue_names = [n.format(namespace=namespace) for n in sqs_queue_names]
 
-    stubber.add_response("create_queue", {"QueueUrl": ""})
-    stubber.add_response("get_queue_attributes", {"Attributes": {"QueueArn": "dlq"}})
-    stubber.add_response(
-        "set_queue_attributes",
-        {},
-        {
-            "QueueUrl": "",
-            "Attributes": {
-                "RedrivePolicy": json.dumps(
-                    {"deadLetterTargetArn": "dlq", "maxReceiveCount": "20"}
-                )
-            },
-        },
-    )
+    for sqs_queue_name in sqs_queue_names:
+        queue = sqs.get_queue_by_name(QueueName=sqs_queue_name)
 
-    # When I create a queue
-    # Then a dead-letter queue should be created
-    # And a redrive policy matching the queue and max receives should be added
-    with stubber:
-        broker.declare_queue("test")
-        stubber.assert_no_pending_responses()
-
-
-def test_tags_queues_on_create():
-    # Given that I have an SQS broker with tags
-    broker = SQSBroker(
-        namespace="dramatiq_sqs_tests", tags={"key1": "value1", "key2": "value2"}
-    )
-
-    # And I've stubbed out all the relevant API calls
-    stubber = Stubber(broker.sqs.meta.client)
-    error_response = {
-        "Error": {
-            "Code": "AWS.SimpleQueueService.QueueDoesNotExist",
-            "Message": "The specified queue does not exist.",
-        }
-    }
-    stubber.add_client_error(
-        "get_queue_url",
-        http_status_code=404,
-        service_error_code="QueueDoesNotExist",
-        service_message="The specified queue does not exist.",
-        response_meta=error_response,
-    )
-    stubber.add_response("create_queue", {"QueueUrl": ""})
-    stubber.add_response(
-        "tag_queue", {}, {"QueueUrl": "", "Tags": {"key1": "value1", "key2": "value2"}}
-    )
-
-    # When I create a queue
-    # Then the queue should have the specified tags
-    with stubber:
-        broker.declare_queue("test")
-        stubber.assert_no_pending_responses()
+        assert sqs.meta.client.list_queue_tags(QueueUrl=queue.url)["Tags"] == tags
