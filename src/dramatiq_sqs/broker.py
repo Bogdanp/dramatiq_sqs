@@ -2,13 +2,15 @@ import json
 import time
 from base64 import b64decode, b64encode
 from collections import deque
-from collections.abc import Iterable, Sequence
-from typing import TYPE_CHECKING, Any, TypeVar
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any
 
 import boto3
 import dramatiq
 from dramatiq.errors import QueueJoinTimeout
 from dramatiq.logging import get_logger
+
+from dramatiq_sqs import utils
 
 if TYPE_CHECKING:
     from mypy_boto3_sqs.service_resource import Message, Queue, SQSServiceResource
@@ -272,7 +274,7 @@ class SQSConsumer(dramatiq.Consumer):
     nack = ack
 
     def requeue(self, messages: Iterable["_SQSMessage"]) -> None:
-        for batch in chunk(messages, chunksize=10):
+        for batch in utils.batched(messages, 10):
             # Setting the VisibilityTimeout to 0 makes the messages immediately visible again.
             response = self.queue.change_message_visibility_batch(
                 Entries=[
@@ -322,19 +324,3 @@ class _SQSMessage(dramatiq.MessageProxy):
         super().__init__(message)
 
         self._sqs_message = sqs_message
-
-
-T = TypeVar("T")
-
-
-def chunk(xs: Iterable[T], *, chunksize=10) -> Iterable[Sequence[T]]:
-    """Split a sequence into subseqs of chunksize length."""
-    chunk = []
-    for x in xs:
-        chunk.append(x)
-        if len(chunk) == chunksize:
-            yield chunk
-            chunk = []
-
-    if chunk:
-        yield chunk
