@@ -9,7 +9,7 @@ from dramatiq.middleware import AgeLimit, Callbacks, Pipelines, Retries, TimeLim
 from mypy_boto3_sqs import SQSServiceResource
 from pytest_docker import Services
 
-from dramatiq_sqs import SQSBroker
+from dramatiq_sqs import SQSBroker, SQSRetries
 
 if TYPE_CHECKING:
     from mypy_boto3_sqs import SQSServiceResource
@@ -76,6 +76,65 @@ def sqs(broker: SQSBroker) -> "SQSServiceResource":
 @pytest.fixture
 def queue_name(broker):
     return f"queue_{uuid.uuid4()}"
+
+
+@pytest.fixture
+def sqs_retries_broker(
+    elasticmq_endpoint_url: str, namespace: str, tags: dict[str, str]
+) -> Iterator[SQSBroker]:
+    broker = SQSBroker(
+        namespace=namespace,
+        middleware=[
+            AgeLimit(),
+            TimeLimit(),
+            Callbacks(),
+            Pipelines(),
+            SQSRetries(min_backoff=1000, max_backoff=900000, max_retries=3),
+        ],
+        dead_letter=True,
+        max_receives=3,
+        tags=tags,
+        visibility_timeout=5,
+        region_name="eu-central-1",
+        endpoint_url=elasticmq_endpoint_url,
+        aws_access_key_id="000000000000",
+        aws_secret_access_key="000000000000",
+    )
+    dramatiq.set_broker(broker)
+
+    yield broker
+
+    for queue in broker.queues.values():
+        queue.delete()
+
+
+@pytest.fixture
+def sqs_retries_broker_no_dlq(
+    elasticmq_endpoint_url: str, namespace: str, tags: dict[str, str]
+) -> Iterator[SQSBroker]:
+    broker = SQSBroker(
+        namespace=namespace,
+        middleware=[
+            AgeLimit(),
+            TimeLimit(),
+            Callbacks(),
+            Pipelines(),
+            SQSRetries(min_backoff=1000, max_backoff=900000, max_retries=3),
+        ],
+        dead_letter=False,
+        tags=tags,
+        visibility_timeout=5,
+        region_name="eu-central-1",
+        endpoint_url=elasticmq_endpoint_url,
+        aws_access_key_id="000000000000",
+        aws_secret_access_key="000000000000",
+    )
+    dramatiq.set_broker(broker)
+
+    yield broker
+
+    for queue in broker.queues.values():
+        queue.delete()
 
 
 @pytest.fixture
