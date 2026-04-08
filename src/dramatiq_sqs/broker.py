@@ -268,8 +268,10 @@ class SQSConsumer(dramatiq.Consumer):
         message._sqs_message.delete()
         self.message_refc -= 1
 
-    #: Messages are added to DLQ by SQS redrive policy, so no actions are necessary
-    nack = ack
+    def nack(self, message: "_SQSMessage") -> None:
+        if getattr(message, "_sqs_nack_delete", True):
+            message._sqs_message.delete()
+        self.message_refc -= 1
 
     def requeue(self, messages: Iterable["_SQSMessage"]) -> None:
         for batch in chunk(messages, chunksize=10):
