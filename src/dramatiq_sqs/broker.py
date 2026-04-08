@@ -292,6 +292,7 @@ class SQSConsumer(dramatiq.Consumer):
         kw: dict[str, Any] = {
             "MaxNumberOfMessages": self.prefetch,
             "WaitTimeSeconds": self.wait_time_seconds,
+            "AttributeNames": ["ApproximateReceiveCount"],
         }
         if self.visibility_timeout is not None:
             kw["VisibilityTimeout"] = self.visibility_timeout
