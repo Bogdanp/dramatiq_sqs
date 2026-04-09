@@ -1,4 +1,3 @@
-import json
 import time
 from base64 import b64decode, b64encode
 from collections import deque
@@ -39,10 +38,6 @@ MAX_PREFETCH = 10
 #: https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-short-and-long-polling.html#sqs-long-polling
 MAX_WAIT_TIME_SECONDS = 20
 
-#: The number of times a message will be received before being added
-#: to the dead-letter queue (if enabled).
-MAX_RECEIVES = 5
-
 
 class SQSBroker(dramatiq.Broker):
     """A Dramatiq_ broker that can be used with `Amazon SQS`_
@@ -61,11 +56,11 @@ class SQSBroker(dramatiq.Broker):
     Parameters:
       namespace: The prefix to use when creating queues.
       middleware: The set of middleware that apply to this broker.
-      retention: The number of seconds messages can be retained for.
+      retention: The number of seconds messages will be retained for in the queue.
         Defaults to 14 days.
       dead_letter: Whether to add a dead-letter queue. Defaults to false.
-      max_receives: The number of times a message should be received before
-        being added to the dead-letter queue. Defaults to MAX_RECEIVES.
+      dead_letter_retention: The number of seconds messages will be retained for in the
+        dead letter queue (if enabled). Defaults to 14 days.
       **options: Additional options that are passed to boto3.
 
     .. _Dramatiq: https://dramatiq.io
@@ -81,7 +76,7 @@ class SQSBroker(dramatiq.Broker):
         middleware: list[dramatiq.Middleware] | None = None,
         retention: int = MAX_MESSAGE_RETENTION_SECONDS,
         dead_letter: bool = False,
-        max_receives: int = MAX_RECEIVES,
+        dead_letter_retention: int = MAX_MESSAGE_RETENTION_SECONDS,
         visibility_timeout: int | None = MAX_VISIBILITY_TIMEOUT_SECONDS,
         tags: dict[str, str] | None = None,
         **options,
@@ -98,12 +93,13 @@ class SQSBroker(dramatiq.Broker):
             )
 
         self.namespace: str | None = namespace
-        self.retention: str = str(retention)
+        self.retention = retention
         self.queues: dict[str, Queue] = {}
-        self.dead_letter: bool = dead_letter
-        self.max_receives: int = max_receives
+        self.dead_letter = dead_letter
+        self.dead_letter_queues: dict[str, Queue] = {}
+        self.dead_letter_retention = dead_letter_retention
         self.visibility_timeout = visibility_timeout
-        self.tags: dict[str, str] | None = tags
+        self.tags = tags
         self.sqs: SQSServiceResource = boto3.resource("sqs", **options)
 
     @property
@@ -116,61 +112,67 @@ class SQSBroker(dramatiq.Broker):
         prefetch: int = 1,
         timeout: int = MAX_WAIT_TIME_SECONDS * 1000,
     ) -> dramatiq.Consumer:
-        try:
-            return self.consumer_class(
-                self.queues[queue_name],
-                prefetch,
-                timeout,
-                visibility_timeout=self.visibility_timeout,
-            )
-        except KeyError:  # pragma: no cover
+        queue = self.queues.get(queue_name, None)
+
+        if queue is None:
             raise dramatiq.QueueNotFound(queue_name)
 
+        dead_letter_queue = self.dead_letter_queues.get(queue_name, None)
+
+        return self.consumer_class(
+            queue,
+            prefetch,
+            timeout,
+            dead_letter_queue=dead_letter_queue,
+            visibility_timeout=self.visibility_timeout,
+        )
+
     def declare_queue(self, queue_name: str) -> None:
+        sqs_queue_name = (
+            f"{self.namespace}_{queue_name}" if self.namespace else queue_name
+        )
+        sqs_dead_letter_queue_name = f"{sqs_queue_name}_dlq"
+
         if queue_name not in self.queues:
-            prefixed_queue_name = queue_name
-            if self.namespace is not None:
-                prefixed_queue_name = f"{self.namespace}_{queue_name}"
-
             self.emit_before("declare_queue", queue_name)
-
-            self.queues[queue_name] = self._get_or_create_queue(
-                QueueName=prefixed_queue_name,
-                Attributes={
-                    "MessageRetentionPeriod": self.retention,
-                },
+            self.queues[queue_name] = self._get_or_create_sqs_queue(
+                sqs_queue_name, message_retention_period=self.retention, tags=self.tags
             )
-            if self.tags:
-                self.sqs.meta.client.tag_queue(
-                    QueueUrl=self.queues[queue_name].url, Tags=self.tags
-                )
 
             if self.dead_letter:
-                dead_letter_queue_name = f"{prefixed_queue_name}_dlq"
-                dead_letter_queue = self._get_or_create_queue(
-                    QueueName=dead_letter_queue_name
+                self.dead_letter_queues[queue_name] = self._get_or_create_sqs_queue(
+                    sqs_dead_letter_queue_name,
+                    message_retention_period=self.dead_letter_retention,
+                    tags=self.tags,
                 )
-                if self.tags:
-                    self.sqs.meta.client.tag_queue(
-                        QueueUrl=dead_letter_queue.url, Tags=self.tags
-                    )
-                redrive_policy = {
-                    "deadLetterTargetArn": dead_letter_queue.attributes["QueueArn"],
-                    "maxReceiveCount": str(self.max_receives),
-                }
-                self.queues[queue_name].set_attributes(
-                    Attributes={"RedrivePolicy": json.dumps(redrive_policy)}
-                )
+
             self.emit_after("declare_queue", queue_name)
 
-    def _get_or_create_queue(self, **kwargs) -> "Queue":
+    def _get_or_create_sqs_queue(
+        self,
+        sqs_queue_name: str,
+        *,
+        message_retention_period: int,
+        tags: dict[str, str] | None = None,
+    ) -> "Queue":
         try:
-            return self.sqs.get_queue_by_name(QueueName=kwargs["QueueName"])
+            queue = self.sqs.get_queue_by_name(QueueName=sqs_queue_name)
+
+            if tags:
+                self.sqs.meta.client.tag_queue(QueueUrl=queue.url, Tags=tags)
+
         except self.sqs.meta.client.exceptions.QueueDoesNotExist:
-            self.logger.debug(
-                f"Queue does not exist, creating queue with params: {kwargs}"
+            self.logger.debug(f"Queue {sqs_queue_name} does not exist, creating")
+
+            queue = self.sqs.create_queue(
+                QueueName=sqs_queue_name,
+                Attributes={
+                    "MessageRetentionPeriod": str(message_retention_period),
+                },
+                tags=tags or {},
             )
-            return self.sqs.create_queue(**kwargs)
+
+        return queue
 
     def enqueue(
         self, message: dramatiq.Message, *, delay: int | None = None
@@ -238,10 +240,12 @@ class SQSConsumer(dramatiq.Consumer):
         prefetch: int,
         timeout: int,
         *,
+        dead_letter_queue: "Queue",
         visibility_timeout: int | None = None,
     ) -> None:
         self.logger = get_logger(__name__, type(self))
         self.queue = queue
+        self.dead_letter_queue = dead_letter_queue
         self.prefetch = min(prefetch, MAX_PREFETCH)
 
         self.visibility_timeout = visibility_timeout
@@ -270,8 +274,12 @@ class SQSConsumer(dramatiq.Consumer):
         message._sqs_message.delete()
         self.message_refc -= 1
 
-    #: Messages are added to DLQ by SQS redrive policy, so no actions are necessary
-    nack = ack
+    def nack(self, message: "_SQSMessage") -> None:
+        if self.dead_letter_queue is not None:
+            self.dead_letter_queue.send_message(MessageBody=message._sqs_message.body)
+
+        message._sqs_message.delete()
+        self.message_refc -= 1
 
     def requeue(self, messages: Iterable["_SQSMessage"]) -> None:
         for batch in utils.batched(messages, 10):

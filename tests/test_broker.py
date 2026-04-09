@@ -28,6 +28,35 @@ def test_can_enqueue_and_process_messages(broker, worker, queue_name):
     assert db == [1]
 
 
+def test_failed_messages_are_deleted_from_queue(broker, worker, queue_name):
+    @dramatiq.actor(queue_name=queue_name, max_retries=0)
+    def do_work():
+        raise RuntimeError()
+
+    do_work.send()
+
+    broker.join(queue_name)
+
+
+@pytest.mark.parametrize("dead_letter", [True])
+@pytest.mark.parametrize(("max_retries", "attempts"), [(0, 5), (3, 5)])
+def test_failed_messages_are_sent_to_dlq(
+    broker, worker, queue_name, max_retries, attempts
+):
+    @dramatiq.actor(queue_name=queue_name, max_retries=max_retries)
+    def do_work():
+        raise RuntimeError()
+
+    for _ in range(attempts):
+        do_work.send()
+
+    broker.join(queue_name)
+
+    dlq = broker.dead_letter_queues[queue_name]
+    messages = dlq.receive_messages(MaxNumberOfMessages=10)
+    assert len(messages) == attempts
+
+
 def test_limits_prefetch_while_if_queue_is_full(broker, worker, queue_name):
     # Given that I have an actor that stores incoming messages in a database
     db = []
@@ -140,7 +169,6 @@ def test_declare_queue(
     namespace: str,
     tags: dict[str, str],
     sqs: "SQSServiceResource",
-    subtests: pytest.Subtests,
 ) -> None:
     broker.declare_queue(queue_name)
 
