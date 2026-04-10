@@ -67,6 +67,9 @@ def broker(
     for queue in broker.queues.values():
         queue.delete()
 
+    for queue in broker.dead_letter_queues.values():
+        queue.delete()
+
 
 @pytest.fixture
 def sqs(broker: SQSBroker) -> "SQSServiceResource":

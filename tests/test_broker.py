@@ -1,5 +1,6 @@
 import time
-from typing import TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 import dramatiq
 import pytest
@@ -155,6 +156,21 @@ def test_can_requeue_consumed_messages(broker, queue_name):
     assert first_message == second_message
 
 
+@pytest.fixture(params=["consume", "enqueue"])
+def ensure_queue_trigger(
+    request: pytest.FixtureRequest, broker: SQSBroker
+) -> Callable[[str], Any]:
+    match request.param:
+        case "consume":
+            return lambda queue_name: broker.consume(queue_name)
+        case "enqueue":
+            return lambda queue_name: broker.enqueue(
+                dramatiq.Message(queue_name, "test", (), {}, {})
+            )
+
+    assert False, "invalid fixture param"
+
+
 @pytest.mark.parametrize(
     ("queue_name", "dead_letter", "sqs_queue_names"),
     [
@@ -169,12 +185,18 @@ def test_declare_queue(
     namespace: str,
     tags: dict[str, str],
     sqs: "SQSServiceResource",
+    ensure_queue_trigger: Callable[[str], Any],
 ) -> None:
     broker.declare_queue(queue_name)
 
-    sqs_queue_names = [n.format(namespace=namespace) for n in sqs_queue_names]
+    assert broker.get_declared_queues() == {queue_name}
+    assert len(list(sqs.queues.all())) == 0
+
+    ensure_queue_trigger(queue_name)
 
     for sqs_queue_name in sqs_queue_names:
-        queue = sqs.get_queue_by_name(QueueName=sqs_queue_name)
+        sqs_queue = sqs.get_queue_by_name(
+            QueueName=sqs_queue_name.format(namespace=namespace)
+        )
 
-        assert sqs.meta.client.list_queue_tags(QueueUrl=queue.url)["Tags"] == tags
+        assert sqs.meta.client.list_queue_tags(QueueUrl=sqs_queue.url)["Tags"] == tags

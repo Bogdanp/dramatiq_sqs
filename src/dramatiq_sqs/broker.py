@@ -81,6 +81,8 @@ class SQSBroker(dramatiq.Broker):
         tags: dict[str, str] | None = None,
         **options,
     ) -> None:
+        self.queue_names: set[str] = set()
+
         super().__init__(middleware=middleware)
 
         if (
@@ -112,12 +114,12 @@ class SQSBroker(dramatiq.Broker):
         prefetch: int = 1,
         timeout: int = MAX_WAIT_TIME_SECONDS * 1000,
     ) -> dramatiq.Consumer:
-        queue = self.queues.get(queue_name, None)
+        self._ensure_queue(queue_name)
 
-        if queue is None:
-            raise dramatiq.QueueNotFound(queue_name)
-
-        dead_letter_queue = self.dead_letter_queues.get(queue_name, None)
+        queue = self.queues[queue_name]
+        dead_letter_queue = (
+            self.dead_letter_queues[queue_name] if self.dead_letter else None
+        )
 
         return self.consumer_class(
             queue,
@@ -128,25 +130,32 @@ class SQSBroker(dramatiq.Broker):
         )
 
     def declare_queue(self, queue_name: str) -> None:
+        if queue_name not in self.queue_names:
+            self.emit_before("declare_queue", queue_name)
+            self.queue_names.add(queue_name)
+            self.emit_after("declare_queue", queue_name)
+
+    def _ensure_queue(self, queue_name: str) -> None:
+        if queue_name not in self.queue_names:
+            raise dramatiq.QueueNotFound(queue_name)
+
         sqs_queue_name = (
             f"{self.namespace}_{queue_name}" if self.namespace else queue_name
         )
-        sqs_dead_letter_queue_name = f"{sqs_queue_name}_dlq"
 
         if queue_name not in self.queues:
-            self.emit_before("declare_queue", queue_name)
             self.queues[queue_name] = self._get_or_create_sqs_queue(
                 sqs_queue_name, message_retention_period=self.retention, tags=self.tags
             )
 
-            if self.dead_letter:
-                self.dead_letter_queues[queue_name] = self._get_or_create_sqs_queue(
-                    sqs_dead_letter_queue_name,
-                    message_retention_period=self.dead_letter_retention,
-                    tags=self.tags,
-                )
+        sqs_dead_letter_queue_name = f"{sqs_queue_name}_dlq"
 
-            self.emit_after("declare_queue", queue_name)
+        if self.dead_letter and queue_name not in self.dead_letter_queues:
+            self.dead_letter_queues[queue_name] = self._get_or_create_sqs_queue(
+                sqs_dead_letter_queue_name,
+                message_retention_period=self.dead_letter_retention,
+                tags=self.tags,
+            )
 
     def _get_or_create_sqs_queue(
         self,
@@ -178,6 +187,8 @@ class SQSBroker(dramatiq.Broker):
         self, message: dramatiq.Message, *, delay: int | None = None
     ) -> dramatiq.Message:
         queue_name = message.queue_name
+        self._ensure_queue(queue_name)
+
         queue = self.queues[queue_name]
         delay_seconds = (delay or 0) // 1000
 
@@ -227,7 +238,7 @@ class SQSBroker(dramatiq.Broker):
             time.sleep(1)
 
     def get_declared_queues(self) -> Iterable[str]:
-        return set(self.queues)
+        return set(self.queue_names)
 
     def get_declared_delay_queues(self) -> Iterable[str]:
         return set()
