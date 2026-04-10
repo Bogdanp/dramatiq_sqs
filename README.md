@@ -1,5 +1,8 @@
 # dramatiq_sqs
 
+> [!WARNING]  
+> The project is under active development. There **will** be breaking changes before v1.0.0. Please make sure to pin the version when using this for anything important.
+
 A [Dramatiq] broker that can be used with [Amazon SQS].
 
 This backend has a number of limitations compared to the built-in
