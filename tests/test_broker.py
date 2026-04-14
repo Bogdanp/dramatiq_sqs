@@ -6,6 +6,7 @@ import dramatiq
 import pytest
 
 from dramatiq_sqs import SQSBroker
+from dramatiq_sqs.exceptions import MessageDelayTooLong, MessageTooLarge
 
 if TYPE_CHECKING:
     from mypy_boto3_sqs.service_resource import SQSServiceResource
@@ -111,8 +112,8 @@ def test_cant_delay_messages_for_longer_than_15_seconds(broker, queue_name):
         pass
 
     # When I attempt to send that actor a message farther than 15 minutes into the future
-    # Then I should get back a ValueError
-    with pytest.raises(ValueError):
+    # Then I should get back a MessageDelayTooLong
+    with pytest.raises(MessageDelayTooLong):
         do_work.send_with_options(delay=3600000)
 
 
@@ -123,8 +124,8 @@ def test_cant_enqueue_messages_that_are_too_large(broker, queue_name):
         pass
 
     # When I attempt to send that actor a message that's too large after base64 encoding
-    # Then a RuntimeError should be raised
-    with pytest.raises(RuntimeError):
+    # Then a MessageTooLarge should be raised
+    with pytest.raises(MessageTooLarge):
         do_work.send("a" * 768 * 1024)
 
 
