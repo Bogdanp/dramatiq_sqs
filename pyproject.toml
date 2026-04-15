@@ -8,7 +8,6 @@ authors = [{ name = "Bogdan Paul Popa" }, { name = "Mikhail Bulash" }]
 maintainers = [{ name = "Mikhail Bulash" }]
 classifiers = [
   "Development Status :: 3 - Alpha",
-  "License :: OSI Approved :: Apache Software License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
@@ -37,11 +36,11 @@ dev = [
 ]
 
 [build-system]
-requires = ["uv_build>=0.10.7,<0.11.0"]
+requires = ["uv_build>=0.11.6,<0.12.0"]
 build-backend = "uv_build"
 
 [tool.uv]
-required-version = ">=0.10.7"
+required-version = ">=0.11.6,<0.12.0"
 
 [tool.pytest]
 testpaths = ["tests"]
