@@ -201,7 +201,7 @@ class SQSBroker(dramatiq.Broker):
         encoded_message = b64encode(message.encode()).decode()
         if len(encoded_message) > MAX_MESSAGE_SIZE_BYTES:
             raise MessageTooLarge(
-                "Messages in SQS can be at most {MAX_MESSAGE_SIZE_BYTES} bytes large."
+                f"Messages in SQS can be at most {MAX_MESSAGE_SIZE_BYTES} bytes large."
             )
 
         self.logger.debug(
