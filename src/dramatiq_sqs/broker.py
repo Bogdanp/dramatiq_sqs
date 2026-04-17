@@ -10,6 +10,7 @@ from dramatiq.errors import QueueJoinTimeout
 from dramatiq.logging import get_logger
 
 from dramatiq_sqs import utils
+from dramatiq_sqs.exceptions import MessageDelayTooLong, MessageTooLarge
 
 if TYPE_CHECKING:
     from mypy_boto3_sqs.service_resource import Message, Queue, SQSServiceResource
@@ -193,13 +194,13 @@ class SQSBroker(dramatiq.Broker):
         delay_seconds = (delay or 0) // 1000
 
         if delay_seconds > MAX_DELAY_SECONDS:
-            raise ValueError(
+            raise MessageDelayTooLong(
                 f"Messages in SQS cannot be delayed for longer than {MAX_DELAY_SECONDS} seconds."
             )
 
         encoded_message = b64encode(message.encode()).decode()
         if len(encoded_message) > MAX_MESSAGE_SIZE_BYTES:
-            raise RuntimeError(
+            raise MessageTooLarge(
                 f"Messages in SQS can be at most {MAX_MESSAGE_SIZE_BYTES} bytes large."
             )
 
