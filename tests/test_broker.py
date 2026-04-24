@@ -157,6 +157,38 @@ def test_can_requeue_consumed_messages(broker, queue_name):
     assert first_message == second_message
 
 
+def test_close_requeues_prefetched_messages(broker, queue_name):
+    # Given that I have an actor and a handful of pending messages
+    @dramatiq.actor(queue_name=queue_name)
+    def do_work():
+        pass
+
+    for _ in range(3):
+        do_work.send()
+
+    # When I start consuming with a prefetch large enough to pull them all
+    # into the internal buffer at once
+    consumer = broker.consume(queue_name, prefetch=5)
+    first = next(consumer)
+    assert first is not None
+
+    # Then there should be buffered messages that haven't been returned yet
+    buffered_count = len(consumer.messages)
+    assert buffered_count >= 1
+
+    # When I close the consumer
+    consumer.close()
+
+    # Then the internal buffer is drained
+    assert len(consumer.messages) == 0
+
+    # And a fresh consumer can read the buffered messages immediately —
+    # meaning they were requeued, not left invisible until VisibilityTimeout.
+    new_consumer = broker.consume(queue_name, prefetch=5)
+    for _ in range(buffered_count):
+        assert next(new_consumer) is not None
+
+
 @pytest.fixture(params=["consume", "enqueue"])
 def ensure_queue_trigger(
     request: pytest.FixtureRequest, broker: SQSBroker
