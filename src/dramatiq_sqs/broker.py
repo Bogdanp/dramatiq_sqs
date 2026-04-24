@@ -310,6 +310,16 @@ class SQSConsumer(dramatiq.Consumer):
             requeued_messages = response.get("Successful", [])
             self.message_refc -= len(requeued_messages)
 
+    def close(self) -> None:
+        # Drain the prefetch buffer: messages fetched from SQS but never
+        # returned via ``__next__`` are invisible until ``VisibilityTimeout``
+        # expires. ``Worker.stop`` drains ``work_queue`` and ``delay_queue``
+        # but has no awareness of this internal buffer, so ``close`` is the
+        # last hook to put them back.
+        buffered, self.messages = list(self.messages), deque()
+        if buffered:
+            self.requeue(buffered)
+
     def __next__(self) -> dramatiq.Message | None:
         kw: dict[str, Any] = {
             "MaxNumberOfMessages": self.prefetch,
