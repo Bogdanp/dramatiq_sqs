@@ -54,6 +54,47 @@ broker = SQSBroker(
 )
 ```
 
+
+## Heartbeat (visibility timeout extension)
+
+By default, the broker keeps in-flight messages alive by periodically
+extending their SQS visibility timeout via `ChangeMessageVisibility`.
+This protects against two issues:
+
+1. A long-running task whose runtime exceeds the queue's
+   `VisibilityTimeout` would otherwise be redelivered to another worker
+   while still being processed (duplicate execution).
+2. With `prefetch > 1`, prefetched messages sit in the consumer's local
+   buffer. Without heartbeats, they can expire while waiting for a
+   worker to pick them up, even if the queue's `VisibilityTimeout` looks
+   generous compared to per-task processing time.
+
+If a worker dies, heartbeats stop and SQS makes the message visible
+again to other consumers within `heartbeat_extension` seconds — typically
+much shorter than the static `VisibilityTimeout` you'd otherwise need
+to set defensively.
+
+Knobs (constructor kwargs on `SQSBroker`):
+
+* `heartbeat_interval` — how often (in seconds) to extend visibility.
+  Pass `None` to disable heartbeats entirely. Defaults to 30 seconds.
+* `heartbeat_extension` — how far each heartbeat pushes the visibility
+  deadline. Must be greater than `heartbeat_interval`. Defaults to 120.
+* `heartbeat_max_extensions` — runaway cap. After this many beats per
+  message, the message is dropped from heartbeat tracking and SQS
+  redelivers it. Defaults to 60 (so by default, a message can be kept
+  alive for up to ~30 minutes total).
+
+To disable:
+
+``` python
+broker = SQSBroker(
+    # ...
+    heartbeat_interval=None,
+)
+```
+
+
 ## Example IAM Policy
 
 Here are the IAM permissions needed by Dramatiq:
@@ -70,13 +111,19 @@ Here are the IAM permissions needed by Dramatiq:
                 "sqs:DeleteMessage",
                 "sqs:DeleteMessageBatch",
                 "sqs:SendMessage",
-                "sqs:SendMessageBatch"
+                "sqs:SendMessageBatch",
+                "sqs:ChangeMessageVisibility",
+                "sqs:ChangeMessageVisibilityBatch"
             ],
             "Resource": ["*"]
         }
     ]
 }
 ```
+
+`sqs:ChangeMessageVisibility` is required by the heartbeat (omit it only
+if you also pass `heartbeat_interval=None`). `sqs:ChangeMessageVisibilityBatch`
+is used by `consumer.requeue()`.
 
 ## License
 
