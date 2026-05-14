@@ -157,7 +157,6 @@ def test_can_requeue_consumed_messages(broker, queue_name):
     assert first_message == second_message
 
 
-@pytest.mark.xfail(strict=True, reason="issue #55: __next__ spins when prefetch reached")
 def test_consumer_backs_off_when_prefetch_limit_reached(broker, queue_name):
     # Given an actor and a consumer with prefetch=1
     @dramatiq.actor(queue_name=queue_name)
