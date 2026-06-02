@@ -157,6 +157,34 @@ def test_can_requeue_consumed_messages(broker, queue_name):
     assert first_message == second_message
 
 
+def test_consumer_backs_off_when_prefetch_limit_reached(broker, queue_name):
+    # Given an actor and a consumer with prefetch=1
+    @dramatiq.actor(queue_name=queue_name)
+    def do_work():
+        pass
+
+    # When I send a message and consume it (without acking)
+    do_work.send()
+    consumer = broker.consume(queue_name, prefetch=1, timeout=1000)
+    in_flight = next(consumer)
+    assert in_flight is not None
+    assert consumer.message_refc == 1
+
+    # And then call __next__ repeatedly while the prefetch limit is reached.
+    deadline = time.monotonic() + 1.0
+    calls = 0
+    while time.monotonic() < deadline:
+        result = next(consumer)
+        assert result is None
+        calls += 1
+
+    # Then the consumer must have backed off so the number of __next__
+    # calls in 1 second stays small instead of spinning.
+    assert calls < 50
+
+    consumer.ack(in_flight)
+
+
 @pytest.fixture(params=["consume", "enqueue"])
 def ensure_queue_trigger(
     request: pytest.FixtureRequest, broker: SQSBroker

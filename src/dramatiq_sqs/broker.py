@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 import boto3
 import dramatiq
+from dramatiq.common import compute_backoff
 from dramatiq.errors import QueueJoinTimeout
 from dramatiq.logging import get_logger
 
@@ -281,6 +282,7 @@ class SQSConsumer(dramatiq.Consumer):
 
         self.messages: deque = deque()
         self.message_refc = 0
+        self.misses = 0
 
     def ack(self, message: "_SQSMessage") -> None:
         message._sqs_message.delete()
@@ -319,7 +321,9 @@ class SQSConsumer(dramatiq.Consumer):
             kw["VisibilityTimeout"] = self.visibility_timeout
 
         try:
-            return self.messages.popleft()
+            message = self.messages.popleft()
+            self.misses = 0
+            return message
         except IndexError:
             if self.message_refc < self.prefetch:
                 for sqs_message in self.queue.receive_messages(**kw):
@@ -334,8 +338,19 @@ class SQSConsumer(dramatiq.Consumer):
                         )
 
             try:
-                return self.messages.popleft()
+                message = self.messages.popleft()
+                self.misses = 0
+                return message
             except IndexError:
+                # Back off to avoid spinning when the prefetch limit is
+                # reached or no messages are available. SQS long-polling
+                # already throttles fetches, but when message_refc >=
+                # prefetch we don't fetch at all and would otherwise busy
+                # loop until a worker thread frees a slot.
+                self.misses, backoff_ms = compute_backoff(
+                    self.misses, max_backoff=self.wait_time_seconds * 1000 or 1000
+                )
+                time.sleep(backoff_ms / 1000)
                 return None
 
 
