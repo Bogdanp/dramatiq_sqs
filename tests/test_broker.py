@@ -9,7 +9,7 @@ from dramatiq_sqs import SQSBroker
 from dramatiq_sqs.exceptions import MessageDelayTooLong, MessageTooLarge
 
 if TYPE_CHECKING:
-    from mypy_boto3_sqs.service_resource import SQSServiceResource
+    from mypy_boto3_sqs import SQSClient
 
 
 def test_can_enqueue_and_process_messages(broker, worker, queue_name):
@@ -54,8 +54,10 @@ def test_failed_messages_are_sent_to_dlq(
 
     broker.join(queue_name)
 
-    dlq = broker.dead_letter_queues[queue_name]
-    messages = dlq.receive_messages(MaxNumberOfMessages=10)
+    dlq_url = broker.dead_letter_queues[queue_name]
+    messages = broker.client.receive_message(
+        QueueUrl=dlq_url, MaxNumberOfMessages=10
+    ).get("Messages", [])
     assert len(messages) == attempts
 
 
@@ -213,19 +215,19 @@ def test_declare_queue(
     broker: SQSBroker,
     namespace: str,
     tags: dict[str, str],
-    sqs: "SQSServiceResource",
+    sqs: "SQSClient",
     ensure_queue_trigger: Callable[[str], Any],
 ) -> None:
     broker.declare_queue(queue_name)
 
     assert broker.get_declared_queues() == {queue_name}
-    assert len(list(sqs.queues.all())) == 0
+    assert len(sqs.list_queues().get("QueueUrls", [])) == 0
 
     ensure_queue_trigger(queue_name)
 
     for sqs_queue_name in sqs_queue_names:
-        sqs_queue = sqs.get_queue_by_name(
+        queue_url = sqs.get_queue_url(
             QueueName=sqs_queue_name.format(namespace=namespace)
-        )
+        )["QueueUrl"]
 
-        assert sqs.meta.client.list_queue_tags(QueueUrl=sqs_queue.url)["Tags"] == tags
+        assert sqs.list_queue_tags(QueueUrl=queue_url)["Tags"] == tags

@@ -6,13 +6,13 @@ from typing import TYPE_CHECKING
 import dramatiq
 import pytest
 from dramatiq.middleware import AgeLimit, Callbacks, Pipelines, Retries, TimeLimit
-from mypy_boto3_sqs import SQSServiceResource
+from mypy_boto3_sqs import SQSClient
 from pytest_docker import Services
 
 from dramatiq_sqs import SQSBroker
 
 if TYPE_CHECKING:
-    from mypy_boto3_sqs import SQSServiceResource
+    from mypy_boto3_sqs import SQSClient
 
 
 @pytest.fixture(scope="session")
@@ -64,16 +64,16 @@ def broker(
 
     yield broker
 
-    for queue in broker.queues.values():
-        queue.delete()
+    for queue_url in broker.queues.values():
+        broker.client.delete_queue(QueueUrl=queue_url)
 
-    for queue in broker.dead_letter_queues.values():
-        queue.delete()
+    for queue_url in broker.dead_letter_queues.values():
+        broker.client.delete_queue(QueueUrl=queue_url)
 
 
 @pytest.fixture
-def sqs(broker: SQSBroker) -> "SQSServiceResource":
-    return broker.sqs
+def sqs(broker: SQSBroker) -> "SQSClient":
+    return broker.client
 
 
 @pytest.fixture
