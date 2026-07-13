@@ -63,6 +63,10 @@ class SQSBroker(dramatiq.Broker):
       dead_letter: Whether to add a dead-letter queue. Defaults to false.
       dead_letter_retention: The number of seconds messages will be retained for in the
         dead letter queue (if enabled). Defaults to 14 days.
+      max_message_size: The maximum size (in bytes) of a base64-encoded message.
+        Messages larger than this raise :class:`MessageTooLarge` on enqueue.
+        Defaults to 1MiB (the SQS maximum), but may be raised for SQS-compatible
+        backends that support larger messages.
       **options: Additional options that are passed to boto3.
 
     .. _Dramatiq: https://dramatiq.io
@@ -80,6 +84,7 @@ class SQSBroker(dramatiq.Broker):
         dead_letter: bool = False,
         dead_letter_retention: int = MAX_MESSAGE_RETENTION_SECONDS,
         visibility_timeout: int | None = MAX_VISIBILITY_TIMEOUT_SECONDS,
+        max_message_size: int = MAX_MESSAGE_SIZE_BYTES,
         tags: dict[str, str] | None = None,
         **options,
     ) -> None:
@@ -96,8 +101,12 @@ class SQSBroker(dramatiq.Broker):
                 f"{MAX_MESSAGE_RETENTION_SECONDS} seconds."
             )
 
+        if max_message_size < 1:
+            raise ValueError("'max_message_size' must be a positive number of bytes.")
+
         self.namespace: str | None = namespace
         self.retention = retention
+        self.max_message_size = max_message_size
         self.queues: dict[str, Queue] = {}
         self.dead_letter = dead_letter
         self.dead_letter_queues: dict[str, Queue] = {}
@@ -200,9 +209,9 @@ class SQSBroker(dramatiq.Broker):
             )
 
         encoded_message = b64encode(message.encode()).decode()
-        if len(encoded_message) > MAX_MESSAGE_SIZE_BYTES:
+        if len(encoded_message) > self.max_message_size:
             raise MessageTooLarge(
-                f"Messages in SQS can be at most {MAX_MESSAGE_SIZE_BYTES} bytes large."
+                f"Messages in SQS can be at most {self.max_message_size} bytes large."
             )
 
         self.logger.debug(
