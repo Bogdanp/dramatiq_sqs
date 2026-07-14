@@ -129,6 +129,27 @@ def test_cant_enqueue_messages_that_are_too_large(broker, queue_name):
         do_work.send("a" * 768 * 1024)
 
 
+def test_max_message_size_is_configurable(broker, queue_name):
+    # Given that I lower the broker's max message size
+    broker.max_message_size = 1024
+
+    @dramatiq.actor(queue_name=queue_name)
+    def do_work(s):
+        pass
+
+    # When I attempt to send a message that exceeds the configured limit
+    # Then a MessageTooLarge should be raised
+    with pytest.raises(MessageTooLarge):
+        do_work.send("a" * 2048)
+
+
+def test_max_message_size_is_validated():
+    # When I attempt to instantiate a broker with a non-positive max message size
+    # Then a ValueError should be raised
+    with pytest.raises(ValueError):
+        SQSBroker(max_message_size=0)
+
+
 def test_retention_period_is_validated():
     # When I attempt to instantiate a broker with an invalid retention period
     # Then a ValueError should be raised
