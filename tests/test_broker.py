@@ -1,15 +1,58 @@
+import contextlib
 import time
-from collections.abc import Callable
+import uuid
+from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, Any
 
 import dramatiq
 import pytest
+from dramatiq.middleware import AgeLimit, Callbacks, Pipelines, Retries, TimeLimit
 
 from dramatiq_sqs import SQSBroker
 from dramatiq_sqs.exceptions import MessageDelayTooLong, MessageTooLarge
 
 if TYPE_CHECKING:
     from mypy_boto3_sqs.service_resource import SQSServiceResource
+
+
+def _make_broker(
+    elasticmq_endpoint_url: str,
+    namespace: str,
+    tags: dict[str, str],
+    **kwargs: Any,
+) -> SQSBroker:
+    """Build an ad-hoc broker for tests that need custom kwargs.
+
+    Mirrors the conftest ``broker`` fixture but lets each test override knobs
+    like ``visibility_timeout`` or the heartbeat settings.
+    """
+    return SQSBroker(
+        namespace=namespace,
+        middleware=[
+            AgeLimit(),
+            TimeLimit(),
+            Callbacks(),
+            Pipelines(),
+            Retries(min_backoff=1000, max_backoff=900000, max_retries=96),
+        ],
+        tags=tags,
+        region_name="eu-central-1",
+        endpoint_url=elasticmq_endpoint_url,
+        aws_access_key_id="000000000000",
+        aws_secret_access_key="000000000000",
+        **kwargs,
+    )
+
+
+@contextlib.contextmanager
+def _broker_session(broker: SQSBroker) -> Iterator[SQSBroker]:
+    """Set as the global broker, yield, then clean up the queues on exit."""
+    dramatiq.set_broker(broker)
+    try:
+        yield broker
+    finally:
+        for queue in broker.queues.values():
+            queue.delete()
 
 
 def test_can_enqueue_and_process_messages(broker, worker, queue_name):
@@ -282,3 +325,154 @@ def test_declare_queue(
         )
 
         assert sqs.meta.client.list_queue_tags(QueueUrl=sqs_queue.url)["Tags"] == tags
+
+
+# --- Heartbeat ---
+
+
+def test_heartbeat_extension_must_exceed_interval():
+    # When extension <= interval, a message could expire between beats.
+    with pytest.raises(ValueError, match="heartbeat_extension"):
+        SQSBroker(heartbeat_interval=60, heartbeat_extension=60)
+    with pytest.raises(ValueError, match="heartbeat_extension"):
+        SQSBroker(heartbeat_interval=60, heartbeat_extension=30)
+
+
+def test_heartbeat_disabled_by_default(broker, queue_name):
+    # Given the default broker (no heartbeat configured)
+    @dramatiq.actor(queue_name=queue_name)
+    def do_work(x):
+        pass
+
+    do_work.send(1)
+
+    consumer = broker.consume(queue_name)
+    try:
+        msg = next(consumer)
+        assert msg is not None
+        # No ticker thread and nothing tracked.
+        assert consumer.heartbeat.enabled is False
+        assert consumer.heartbeat._ticker is None  # type: ignore[attr-defined]
+        assert consumer.heartbeat._tracked == {}  # type: ignore[attr-defined]
+    finally:
+        consumer.ack(msg)
+        consumer.close()
+
+
+def test_heartbeat_tracks_from_receive_until_ack(
+    elasticmq_endpoint_url, namespace, tags
+):
+    # Given a broker with the heartbeat enabled
+    with _broker_session(
+        _make_broker(
+            elasticmq_endpoint_url,
+            namespace,
+            tags,
+            heartbeat_interval=1,
+            heartbeat_extension=30,
+        )
+    ) as broker:
+        queue_name = f"queue_{uuid.uuid4()}"
+
+        @dramatiq.actor(queue_name=queue_name)
+        def do_work(x):
+            pass
+
+        do_work.send(1)
+        do_work.send(2)
+        # Give SQS a moment so both messages are available in one receive.
+        time.sleep(0.5)
+
+        consumer = broker.consume(queue_name, prefetch=2)
+        try:
+            msg1 = next(consumer)
+            msg2 = next(consumer)
+            assert msg1 is not None
+            assert msg2 is not None
+
+            tracked = consumer.heartbeat._tracked  # type: ignore[attr-defined]
+
+            # Both are tracked from the moment they're received.
+            assert msg1.message_id in tracked
+            assert msg2.message_id in tracked
+
+            # Acking one untracks only that message.
+            consumer.ack(msg1)
+            assert msg1.message_id not in tracked
+            assert msg2.message_id in tracked
+
+            consumer.ack(msg2)
+            assert msg2.message_id not in tracked
+        finally:
+            consumer.close()
+
+
+def test_heartbeat_extends_visibility_for_long_running_task(
+    elasticmq_endpoint_url, namespace, tags
+):
+    # Given a visibility window shorter than the task's runtime, but with the
+    # heartbeat keeping the message in flight.
+    with _broker_session(
+        _make_broker(
+            elasticmq_endpoint_url,
+            namespace,
+            tags,
+            visibility_timeout=3,
+            heartbeat_interval=1,
+            heartbeat_extension=3,
+        )
+    ) as broker:
+        queue_name = f"queue_{uuid.uuid4()}"
+
+        db: list[int] = []
+
+        @dramatiq.actor(queue_name=queue_name, max_retries=0)
+        def slow_work(x: int) -> None:
+            db.append(x)
+            time.sleep(6)  # twice the visibility window
+
+        worker = dramatiq.Worker(broker)
+        worker.start()
+        try:
+            slow_work.send(1)
+            broker.join(queue_name, timeout=15000)
+
+            # Processed exactly once. The heartbeat kept it invisible for the
+            # whole 6s sleep.
+            assert db == [1]
+        finally:
+            worker.stop()
+
+
+def test_without_heartbeat_long_running_task_is_redelivered(
+    elasticmq_endpoint_url, namespace, tags
+):
+    # Control for the test above: with the heartbeat off and a short visibility
+    # window, SQS redelivers the message mid-flight and it runs more than once.
+    with _broker_session(
+        _make_broker(
+            elasticmq_endpoint_url,
+            namespace,
+            tags,
+            visibility_timeout=3,
+            heartbeat_interval=None,
+        )
+    ) as broker:
+        queue_name = f"queue_{uuid.uuid4()}"
+
+        db: list[int] = []
+
+        @dramatiq.actor(queue_name=queue_name, max_retries=0)
+        def slow_work(x: int) -> None:
+            db.append(x)
+            time.sleep(6)
+
+        worker = dramatiq.Worker(broker)
+        worker.start()
+        try:
+            slow_work.send(1)
+            # Long enough for the original run plus at least one redelivery.
+            time.sleep(12)
+            assert len(db) >= 2
+        finally:
+            worker.stop()

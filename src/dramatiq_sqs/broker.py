@@ -10,7 +10,7 @@ from dramatiq.common import compute_backoff
 from dramatiq.errors import QueueJoinTimeout
 from dramatiq.logging import get_logger
 
-from dramatiq_sqs import utils
+from dramatiq_sqs import heartbeat, utils
 from dramatiq_sqs.exceptions import MessageDelayTooLong, MessageTooLarge
 
 if TYPE_CHECKING:
@@ -67,6 +67,21 @@ class SQSBroker(dramatiq.Broker):
         Messages larger than this raise :class:`MessageTooLarge` on enqueue.
         Defaults to 1MiB (the SQS maximum), but may be raised for SQS-compatible
         backends that support larger messages.
+      heartbeat_interval: How often (in seconds) to extend the visibility
+        timeout of in-flight messages via ``ChangeMessageVisibility``. When set,
+        the consumer keeps received messages invisible for as long as this
+        worker is alive, so a task that outlives the queue's ``visibility_timeout``
+        (or a message sitting in the prefetch buffer) is not redelivered
+        mid-flight. If the worker dies, beats stop and SQS releases the message
+        within ``heartbeat_extension`` seconds. Defaults to ``None`` (disabled).
+        Enabling it requires the ``sqs:ChangeMessageVisibility`` IAM permission.
+      heartbeat_extension: How many seconds each beat pushes the visibility
+        deadline forward. Must be greater than ``heartbeat_interval`` so a
+        message can't expire between beats. Defaults to 120 seconds.
+      heartbeat_max_extensions: Cap on the number of beats per message, a guard
+        against a stuck worker pinning a message forever. After this many beats
+        the message is dropped from tracking and SQS redelivers it. Defaults to
+        60, which with a 30s interval keeps a message alive for up to ~30 minutes.
       **options: Additional options that are passed to boto3.
 
     .. _Dramatiq: https://dramatiq.io
@@ -85,6 +100,9 @@ class SQSBroker(dramatiq.Broker):
         dead_letter_retention: int = MAX_MESSAGE_RETENTION_SECONDS,
         visibility_timeout: int | None = MAX_VISIBILITY_TIMEOUT_SECONDS,
         max_message_size: int = MAX_MESSAGE_SIZE_BYTES,
+        heartbeat_interval: int | None = None,
+        heartbeat_extension: int = heartbeat.DEFAULT_HEARTBEAT_EXTENSION_SECONDS,
+        heartbeat_max_extensions: int = heartbeat.DEFAULT_HEARTBEAT_MAX_EXTENSIONS,
         tags: dict[str, str] | None = None,
         **options,
     ) -> None:
@@ -104,6 +122,8 @@ class SQSBroker(dramatiq.Broker):
         if max_message_size < 1:
             raise ValueError("'max_message_size' must be a positive number of bytes.")
 
+        heartbeat.validate_config(heartbeat_interval, heartbeat_extension)
+
         self.namespace: str | None = namespace
         self.retention = retention
         self.max_message_size = max_message_size
@@ -112,6 +132,9 @@ class SQSBroker(dramatiq.Broker):
         self.dead_letter_queues: dict[str, Queue] = {}
         self.dead_letter_retention = dead_letter_retention
         self.visibility_timeout = visibility_timeout
+        self.heartbeat_interval = heartbeat_interval
+        self.heartbeat_extension = heartbeat_extension
+        self.heartbeat_max_extensions = heartbeat_max_extensions
         self.tags = tags
         self.sqs: SQSServiceResource = boto3.resource("sqs", **options)
 
@@ -138,6 +161,9 @@ class SQSBroker(dramatiq.Broker):
             timeout,
             dead_letter_queue=dead_letter_queue,
             visibility_timeout=self.visibility_timeout,
+            heartbeat_interval=self.heartbeat_interval,
+            heartbeat_extension=self.heartbeat_extension,
+            heartbeat_max_extensions=self.heartbeat_max_extensions,
         )
 
     def declare_queue(self, queue_name: str) -> None:
@@ -264,6 +290,9 @@ class SQSConsumer(dramatiq.Consumer):
         *,
         dead_letter_queue: "Queue",
         visibility_timeout: int | None = None,
+        heartbeat_interval: int | None = None,
+        heartbeat_extension: int = heartbeat.DEFAULT_HEARTBEAT_EXTENSION_SECONDS,
+        heartbeat_max_extensions: int = heartbeat.DEFAULT_HEARTBEAT_MAX_EXTENSIONS,
     ) -> None:
         self.logger = get_logger(__name__, type(self))
         self.queue = queue
@@ -293,9 +322,18 @@ class SQSConsumer(dramatiq.Consumer):
         self.message_refc = 0
         self.misses = 0
 
+        self.heartbeat = heartbeat.Heartbeat(
+            queue,
+            interval=heartbeat_interval,
+            extension=heartbeat_extension,
+            max_extensions=heartbeat_max_extensions,
+        )
+        self.heartbeat.start()
+
     def ack(self, message: "_SQSMessage") -> None:
         message._sqs_message.delete()
         self.message_refc -= 1
+        self.heartbeat.untrack(message.message_id)
 
     def nack(self, message: "_SQSMessage") -> None:
         if self.dead_letter_queue is not None:
@@ -303,6 +341,7 @@ class SQSConsumer(dramatiq.Consumer):
 
         message._sqs_message.delete()
         self.message_refc -= 1
+        self.heartbeat.untrack(message.message_id)
 
     def requeue(self, messages: Iterable["_SQSMessage"]) -> None:
         for batch in utils.batched(messages, 10):
@@ -321,7 +360,14 @@ class SQSConsumer(dramatiq.Consumer):
             requeued_messages = response.get("Successful", [])
             self.message_refc -= len(requeued_messages)
 
+            for message in batch:
+                self.heartbeat.untrack(message.message_id)
+
     def close(self) -> None:
+        # Stop the heartbeat before draining so it doesn't beat messages we're
+        # about to hand back to SQS.
+        self.heartbeat.stop()
+
         # Drain the prefetch buffer: messages fetched from SQS but never
         # returned via ``__next__`` are invisible until ``VisibilityTimeout``
         # expires. ``Worker.stop`` drains ``work_queue`` and ``delay_queue``
@@ -349,8 +395,12 @@ class SQSConsumer(dramatiq.Consumer):
                     try:
                         encoded_message = b64decode(sqs_message.body)
                         dramatiq_message = dramatiq.Message.decode(encoded_message)
-                        self.messages.append(_SQSMessage(sqs_message, dramatiq_message))
+                        wrapped = _SQSMessage(sqs_message, dramatiq_message)
+                        self.messages.append(wrapped)
                         self.message_refc += 1
+                        # Track from receipt, not process start, so messages
+                        # waiting in the prefetch buffer are heartbeated too.
+                        self.heartbeat.track(wrapped)
                     except Exception:  # pragma: no cover
                         self.logger.exception(
                             "Failed to decode message: %r", sqs_message.body

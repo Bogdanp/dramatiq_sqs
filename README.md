@@ -54,6 +54,46 @@ broker = SQSBroker(
 )
 ```
 
+## Heartbeat (visibility timeout extension)
+
+The heartbeat is **off by default**. When enabled, the consumer periodically
+extends the SQS visibility timeout of in-flight messages via
+`ChangeMessageVisibility`, which protects against two issues:
+
+1. A long-running task whose runtime exceeds the queue's `VisibilityTimeout`
+   would otherwise be redelivered to another worker while still being
+   processed (duplicate execution).
+2. With `prefetch > 1`, prefetched messages sit in the consumer's local buffer.
+   Without heartbeats they can expire while waiting for a worker to pick them
+   up, even if the queue's `VisibilityTimeout` looks generous compared to
+   per-task processing time.
+
+Because messages are tracked from the moment they are received (not from when
+processing starts), both cases are covered. If a worker dies, heartbeats stop
+and SQS makes the message visible again within `heartbeat_extension` seconds,
+so you can set a short visibility window and still avoid mid-flight redelivery.
+
+Enable it by setting `heartbeat_interval`:
+
+``` python
+broker = SQSBroker(
+    # ...
+    heartbeat_interval=30,        # extend visibility every 30s (None disables)
+    heartbeat_extension=120,      # each beat pushes the deadline 120s forward
+    heartbeat_max_extensions=60,  # runaway cap: drop after this many beats
+)
+```
+
+`heartbeat_extension` must be greater than `heartbeat_interval` so a message
+can't expire between beats. After `heartbeat_max_extensions` beats a message is
+dropped from tracking and left to SQS to redeliver, so a stuck worker can't pin
+it forever.
+
+Beats run on one background thread per consumer. Because of the GIL, a worker
+running CPU-bound work that never releases it can delay beats, so keep a wide
+margin between `heartbeat_interval` and `heartbeat_extension` (the defaults
+leave 90s of slack).
+
 ## Example IAM Policy
 
 Here are the IAM permissions needed by Dramatiq:
@@ -70,13 +110,17 @@ Here are the IAM permissions needed by Dramatiq:
                 "sqs:DeleteMessage",
                 "sqs:DeleteMessageBatch",
                 "sqs:SendMessage",
-                "sqs:SendMessageBatch"
+                "sqs:SendMessageBatch",
+                "sqs:ChangeMessageVisibility"
             ],
             "Resource": ["*"]
         }
     ]
 }
 ```
+
+`sqs:ChangeMessageVisibility` covers both the batch requeue (used on worker
+shutdown) and the heartbeat.
 
 ## License
 
