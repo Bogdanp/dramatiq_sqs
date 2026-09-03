@@ -54,9 +54,9 @@ def test_failed_messages_are_sent_to_dlq(
 
     broker.join(queue_name)
 
-    dlq_url = broker.dead_letter_queues[queue_name]
+    dl_queue_url = broker.queuesets[queue_name].dl_queue
     messages = broker.client.receive_message(
-        QueueUrl=dlq_url, MaxNumberOfMessages=10
+        QueueUrl=dl_queue_url, MaxNumberOfMessages=10
     ).get("Messages", [])
     assert len(messages) == attempts
 
