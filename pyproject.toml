@@ -18,7 +18,11 @@ classifiers = [
 ]
 version = "0.4.4"
 requires-python = ">=3.10"
-dependencies = ["boto3", "dramatiq"]
+dependencies = [
+  "boto3",
+  "dramatiq",
+  "typing-extensions >= 4.15.0 ; python_full_version < '3.11'",
+]
 
 [project.urls]
 Repository = "https://github.com/Bogdanp/dramatiq_sqs"

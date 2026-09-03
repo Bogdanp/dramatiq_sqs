@@ -248,6 +248,7 @@ source = { editable = "." }
 dependencies = [
     { name = "boto3" },
     { name = "dramatiq" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
 ]
 
 [package.dev-dependencies]
@@ -266,6 +267,7 @@ dev = [
 requires-dist = [
     { name = "boto3" },
     { name = "dramatiq" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'", specifier = ">=4.15.0" },
 ]
 
 [package.metadata.requires-dev]

@@ -12,6 +12,7 @@ from dramatiq.logging import get_logger
 
 from dramatiq_sqs import utils
 from dramatiq_sqs.exceptions import MessageDelayTooLong, MessageTooLarge
+from dramatiq_sqs.queues import QueueSet, QueueSetRegistry
 
 if TYPE_CHECKING:
     from mypy_boto3_sqs import SQSClient
@@ -89,8 +90,9 @@ class SQSBroker(dramatiq.Broker):
         tags: dict[str, str] | None = None,
         **options,
     ) -> None:
-        self.queue_names: set[str] = set()
-
+        self.queuesets: QueueSetRegistry[str] = QueueSetRegistry(
+            factory=self._ensure_queue
+        )
         super().__init__(middleware=middleware)
 
         if (
@@ -108,14 +110,11 @@ class SQSBroker(dramatiq.Broker):
         self.namespace: str | None = namespace
         self.retention = retention
         self.max_message_size = max_message_size
-        #: Maps Dramatiq queue names to their SQS queue URLs.
-        self.queues: dict[str, str] = {}
         self.dead_letter = dead_letter
-        #: Maps Dramatiq queue names to their SQS dead-letter queue URLs.
-        self.dead_letter_queues: dict[str, str] = {}
         self.dead_letter_retention = dead_letter_retention
         self.visibility_timeout = visibility_timeout
         self.tags = tags
+
         # A broker is shared by every worker thread (and, for ``enqueue``, by
         # arbitrary application threads such as a web server's).  boto3 resources
         # are not thread-safe and must not be shared across threads, but clients
@@ -133,48 +132,41 @@ class SQSBroker(dramatiq.Broker):
         prefetch: int = 1,
         timeout: int = MAX_WAIT_TIME_SECONDS * 1000,
     ) -> dramatiq.Consumer:
-        self._ensure_queue(queue_name)
-
-        dead_letter_queue_url = (
-            self.dead_letter_queues[queue_name] if self.dead_letter else None
-        )
-
         return self.consumer_class(
             self.client,
-            self.queues[queue_name],
+            self.queuesets[queue_name].queue,
             prefetch,
             timeout,
-            dead_letter_queue_url=dead_letter_queue_url,
+            dead_letter_queue_url=self.queuesets[queue_name].dl_queue,
             visibility_timeout=self.visibility_timeout,
         )
 
     def declare_queue(self, queue_name: str) -> None:
-        if queue_name not in self.queue_names:
+        if queue_name not in self.queuesets:
             self.emit_before("declare_queue", queue_name)
-            self.queue_names.add(queue_name)
+            self.queuesets.declare_queueset(queue_name)
             self.emit_after("declare_queue", queue_name)
 
-    def _ensure_queue(self, queue_name: str) -> None:
-        if queue_name not in self.queue_names:
-            raise dramatiq.QueueNotFound(queue_name)
-
+    def _ensure_queue(self, queue_name: str) -> QueueSet[str]:
         sqs_queue_name = (
             f"{self.namespace}_{queue_name}" if self.namespace else queue_name
         )
 
-        if queue_name not in self.queues:
-            self.queues[queue_name] = self._get_or_create_sqs_queue(
-                sqs_queue_name, message_retention_period=self.retention, tags=self.tags
-            )
+        sqs_queue = self._get_or_create_sqs_queue(
+            sqs_queue_name, message_retention_period=self.retention, tags=self.tags
+        )
 
-        sqs_dead_letter_queue_name = f"{sqs_queue_name}_dlq"
-
-        if self.dead_letter and queue_name not in self.dead_letter_queues:
-            self.dead_letter_queues[queue_name] = self._get_or_create_sqs_queue(
-                sqs_dead_letter_queue_name,
+        if self.dead_letter:
+            sqs_dl_queue_name = f"{sqs_queue_name}_dlq"
+            sqs_dl_queue = self._get_or_create_sqs_queue(
+                sqs_dl_queue_name,
                 message_retention_period=self.dead_letter_retention,
                 tags=self.tags,
             )
+        else:
+            sqs_dl_queue = None
+
+        return QueueSet(queue_name, sqs_queue, sqs_dl_queue)
 
     def _get_or_create_sqs_queue(
         self,
@@ -206,9 +198,8 @@ class SQSBroker(dramatiq.Broker):
         self, message: dramatiq.Message, *, delay: int | None = None
     ) -> dramatiq.Message:
         queue_name = message.queue_name
-        self._ensure_queue(queue_name)
 
-        queue_url = self.queues[queue_name]
+        queue_url = self.queuesets[queue_name].queue
         delay_seconds = (delay or 0) // 1000
 
         if delay_seconds > MAX_DELAY_SECONDS:
@@ -235,7 +226,7 @@ class SQSBroker(dramatiq.Broker):
         return message
 
     def join(self, queue_name: str, *, timeout: int | None = None) -> None:
-        queue_url = self.queues[queue_name]
+        queue_url = self.queuesets[queue_name].queue
 
         deadline = timeout and time.monotonic() + timeout
 
@@ -265,7 +256,7 @@ class SQSBroker(dramatiq.Broker):
             time.sleep(1)
 
     def get_declared_queues(self) -> Iterable[str]:
-        return set(self.queue_names)
+        return self.queuesets.declared_queuesets
 
     def get_declared_delay_queues(self) -> Iterable[str]:
         return set()
