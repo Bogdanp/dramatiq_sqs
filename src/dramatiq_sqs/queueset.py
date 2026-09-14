@@ -19,11 +19,14 @@ class QueueSet(NamedTuple, Generic[_Q]):
     dl_queue: _Q | None
 
 
+QueueSetFactory = Callable[[str], QueueSet[_Q]]
+
+
 class QueueSetRegistry(dict[str, QueueSet[_Q]]):
     def __init__(
         self,
         queuesets: dict[str, QueueSet[_Q]] | None = None,
-        factory: Callable[[str], QueueSet[_Q]] | None = None,
+        factory: QueueSetFactory[_Q] | None = None,
     ) -> None:
         super().__init__(queuesets or ())
         self._names = set(self.keys())

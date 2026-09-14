@@ -54,7 +54,7 @@ def test_failed_messages_are_sent_to_dlq(
 
     broker.join(queue_name)
 
-    dl_queue_url = broker.queuesets[queue_name].dl_queue
+    dl_queue_url = broker.queuesets[queue_name].dl_queue.url
     messages = broker.client.receive_message(
         QueueUrl=dl_queue_url, MaxNumberOfMessages=10
     ).get("Messages", [])
