@@ -12,7 +12,8 @@ from dramatiq.logging import get_logger
 
 from dramatiq_sqs import utils
 from dramatiq_sqs.exceptions import MessageDelayTooLong, MessageTooLarge
-from dramatiq_sqs.queues import QueueSet, QueueSetRegistry
+from dramatiq_sqs.queueset import QueueSet, QueueSetFactory, QueueSetRegistry
+from dramatiq_sqs.sqs_queue import SQSQueue, Tags, ensure_sqs_queue
 
 if TYPE_CHECKING:
     from mypy_boto3_sqs import SQSClient
@@ -41,6 +42,36 @@ MAX_PREFETCH = 10
 #: The max value for WaitTimeSeconds.
 #: https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-short-and-long-polling.html#sqs-long-polling
 MAX_WAIT_TIME_SECONDS = 20
+
+
+def SQSQueueSetFactory(
+    sqs: "SQSClient",
+    namespace: str | None = None,
+    *,
+    queue_retention: int,
+    dl_queues_enabled: bool = False,
+    dl_queue_retention: int | None = None,
+    tags: Tags | None = None,
+) -> QueueSetFactory[SQSQueue]:
+    def factory(name: str) -> QueueSet[SQSQueue]:
+        queue_name = "_".join(filter(None, (namespace, name)))
+        queue_attributes = {
+            "MessageRetentionPeriod": str(queue_retention),
+        }
+        queue = ensure_sqs_queue(sqs, queue_name, queue_attributes, tags)
+
+        if dl_queues_enabled:
+            dl_queue_name = "_".join(filter(None, (namespace, name, "dlq")))
+            dl_queue_attributes = {
+                "MessageRetentionPeriod": str(dl_queue_retention or queue_retention),
+            }
+            dl_queue = ensure_sqs_queue(sqs, dl_queue_name, dl_queue_attributes, tags)
+        else:
+            dl_queue = None
+
+        return QueueSet[SQSQueue](name, queue, dl_queue)
+
+    return factory
 
 
 class SQSBroker(dramatiq.Broker):
@@ -90,11 +121,6 @@ class SQSBroker(dramatiq.Broker):
         tags: dict[str, str] | None = None,
         **options,
     ) -> None:
-        self.queuesets: QueueSetRegistry[str] = QueueSetRegistry(
-            factory=self._ensure_queue
-        )
-        super().__init__(middleware=middleware)
-
         if (
             retention < MIN_MESSAGE_RETENTION_SECONDS
             or retention > MAX_MESSAGE_RETENTION_SECONDS
@@ -107,20 +133,20 @@ class SQSBroker(dramatiq.Broker):
         if max_message_size < 1:
             raise ValueError("'max_message_size' must be a positive number of bytes.")
 
-        self.namespace: str | None = namespace
-        self.retention = retention
+        self.client = boto3.client("sqs", **options)
+        self.queuesets = QueueSetRegistry[SQSQueue](
+            factory=SQSQueueSetFactory(
+                self.client,
+                namespace,
+                queue_retention=retention,
+                dl_queues_enabled=dead_letter,
+                dl_queue_retention=dead_letter_retention,
+                tags=tags,
+            )
+        )
+        super().__init__(middleware=middleware)
         self.max_message_size = max_message_size
-        self.dead_letter = dead_letter
-        self.dead_letter_retention = dead_letter_retention
         self.visibility_timeout = visibility_timeout
-        self.tags = tags
-
-        # A broker is shared by every worker thread (and, for ``enqueue``, by
-        # arbitrary application threads such as a web server's).  boto3 resources
-        # are not thread-safe and must not be shared across threads, but clients
-        # are, so all SQS calls go through a single shared client.
-        # https://docs.aws.amazon.com/boto3/latest/guide/clients.html#multithreading-or-multiprocessing-with-clients
-        self.client: SQSClient = boto3.client("sqs", **options)
 
     @property
     def consumer_class(self):
@@ -137,7 +163,7 @@ class SQSBroker(dramatiq.Broker):
             self.queuesets[queue_name].queue,
             prefetch,
             timeout,
-            dead_letter_queue_url=self.queuesets[queue_name].dl_queue,
+            dl_queue=self.queuesets[queue_name].dl_queue,
             visibility_timeout=self.visibility_timeout,
         )
 
@@ -147,59 +173,11 @@ class SQSBroker(dramatiq.Broker):
             self.queuesets.declare_queueset(queue_name)
             self.emit_after("declare_queue", queue_name)
 
-    def _ensure_queue(self, queue_name: str) -> QueueSet[str]:
-        sqs_queue_name = (
-            f"{self.namespace}_{queue_name}" if self.namespace else queue_name
-        )
-
-        sqs_queue = self._get_or_create_sqs_queue(
-            sqs_queue_name, message_retention_period=self.retention, tags=self.tags
-        )
-
-        if self.dead_letter:
-            sqs_dl_queue_name = f"{sqs_queue_name}_dlq"
-            sqs_dl_queue = self._get_or_create_sqs_queue(
-                sqs_dl_queue_name,
-                message_retention_period=self.dead_letter_retention,
-                tags=self.tags,
-            )
-        else:
-            sqs_dl_queue = None
-
-        return QueueSet(queue_name, sqs_queue, sqs_dl_queue)
-
-    def _get_or_create_sqs_queue(
-        self,
-        sqs_queue_name: str,
-        *,
-        message_retention_period: int,
-        tags: dict[str, str] | None = None,
-    ) -> str:
-        try:
-            queue_url = self.client.get_queue_url(QueueName=sqs_queue_name)["QueueUrl"]
-
-            if tags:
-                self.client.tag_queue(QueueUrl=queue_url, Tags=tags)
-
-        except self.client.exceptions.QueueDoesNotExist:
-            self.logger.debug(f"Queue {sqs_queue_name} does not exist, creating")
-
-            queue_url = self.client.create_queue(
-                QueueName=sqs_queue_name,
-                Attributes={
-                    "MessageRetentionPeriod": str(message_retention_period),
-                },
-                tags=tags or {},
-            )["QueueUrl"]
-
-        return queue_url
-
     def enqueue(
         self, message: dramatiq.Message, *, delay: int | None = None
     ) -> dramatiq.Message:
-        queue_name = message.queue_name
-
-        queue_url = self.queuesets[queue_name].queue
+        queueset = self.queuesets[message.queue_name]
+        queue = queueset.queue
         delay_seconds = (delay or 0) // 1000
 
         if delay_seconds > MAX_DELAY_SECONDS:
@@ -214,11 +192,11 @@ class SQSBroker(dramatiq.Broker):
             )
 
         self.logger.debug(
-            "Enqueueing message %r on queue %r.", message.message_id, queue_name
+            "Enqueueing message %r on queue %r.", message.message_id, queue.name
         )
         self.emit_before("enqueue", message, delay)
         self.client.send_message(
-            QueueUrl=queue_url,
+            QueueUrl=queue.url,
             MessageBody=encoded_message,
             DelaySeconds=delay_seconds,
         )
@@ -226,7 +204,7 @@ class SQSBroker(dramatiq.Broker):
         return message
 
     def join(self, queue_name: str, *, timeout: int | None = None) -> None:
-        queue_url = self.queuesets[queue_name].queue
+        queue = self.queuesets[queue_name].queue
 
         deadline = timeout and time.monotonic() + timeout
 
@@ -235,7 +213,7 @@ class SQSBroker(dramatiq.Broker):
                 raise QueueJoinTimeout(queue_name)
 
             attributes = self.client.get_queue_attributes(
-                QueueUrl=queue_url,
+                QueueUrl=queue.url,
                 AttributeNames=[
                     "ApproximateNumberOfMessages",
                     "ApproximateNumberOfMessagesDelayed",
@@ -266,17 +244,17 @@ class SQSConsumer(dramatiq.Consumer):
     def __init__(
         self,
         client: "SQSClient",
-        queue_url: str,
+        queue: SQSQueue,
         prefetch: int,
         timeout: int,
         *,
-        dead_letter_queue_url: str | None,
+        dl_queue: SQSQueue | None,
         visibility_timeout: int | None = None,
     ) -> None:
         self.logger = get_logger(__name__, type(self))
         self.client = client
-        self.queue_url = queue_url
-        self.dead_letter_queue_url = dead_letter_queue_url
+        self.queue = queue
+        self.dl_queue = dl_queue
         self.prefetch = min(prefetch, MAX_PREFETCH)
 
         self.visibility_timeout = visibility_timeout
@@ -304,20 +282,20 @@ class SQSConsumer(dramatiq.Consumer):
 
     def ack(self, message: "_SQSMessage") -> None:
         self.client.delete_message(
-            QueueUrl=self.queue_url,
+            QueueUrl=self.queue.url,
             ReceiptHandle=message._sqs_message["ReceiptHandle"],
         )
         self.message_refc -= 1
 
     def nack(self, message: "_SQSMessage") -> None:
-        if self.dead_letter_queue_url is not None:
+        if self.dl_queue is not None:
             self.client.send_message(
-                QueueUrl=self.dead_letter_queue_url,
+                QueueUrl=self.dl_queue.url,
                 MessageBody=message._sqs_message["Body"],
             )
 
         self.client.delete_message(
-            QueueUrl=self.queue_url,
+            QueueUrl=self.queue.url,
             ReceiptHandle=message._sqs_message["ReceiptHandle"],
         )
         self.message_refc -= 1
@@ -326,7 +304,7 @@ class SQSConsumer(dramatiq.Consumer):
         for batch in utils.batched(messages, 10):
             # Setting the VisibilityTimeout to 0 makes the messages immediately visible again.
             response = self.client.change_message_visibility_batch(
-                QueueUrl=self.queue_url,
+                QueueUrl=self.queue.url,
                 Entries=[
                     {
                         "Id": str(i),
@@ -364,7 +342,7 @@ class SQSConsumer(dramatiq.Consumer):
             return message
         except IndexError:
             if self.message_refc < self.prefetch:
-                response = self.client.receive_message(QueueUrl=self.queue_url, **kw)
+                response = self.client.receive_message(QueueUrl=self.queue.url, **kw)
                 for sqs_message in response.get("Messages", []):
                     try:
                         encoded_message = b64decode(sqs_message["Body"])

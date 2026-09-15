@@ -65,10 +65,10 @@ def broker(
     yield broker
 
     for queueset in broker.queuesets.values():
-        broker.client.delete_queue(QueueUrl=queueset.queue)
+        broker.client.delete_queue(QueueUrl=queueset.queue.url)
 
         if queueset.dl_queue is not None:
-            broker.client.delete_queue(QueueUrl=queueset.dl_queue)
+            broker.client.delete_queue(QueueUrl=queueset.dl_queue.url)
 
 
 @pytest.fixture
