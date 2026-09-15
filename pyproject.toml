@@ -30,6 +30,7 @@ Repository = "https://github.com/Bogdanp/dramatiq_sqs"
 [dependency-groups]
 dev = [
   "boto3-stubs[boto3,sqs]",
+  "moto[server]",
   "nox-uv",
   "nox",
   "pytest-cov",
