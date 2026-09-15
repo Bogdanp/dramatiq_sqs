@@ -1,13 +1,12 @@
 import uuid
 from collections.abc import Iterator
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import dramatiq
 import pytest
 from dramatiq.middleware import AgeLimit, Callbacks, Pipelines, Retries, TimeLimit
+from moto.server import ThreadedMotoServer
 from mypy_boto3_sqs import SQSClient
-from pytest_docker import Services
 
 from dramatiq_sqs import SQSBroker
 
@@ -16,13 +15,19 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture(scope="session")
-def docker_compose_file() -> str:
-    return str(Path(__file__).parent / "compose.yaml")
+def moto_server():
+    server = ThreadedMotoServer(port=0)
+    server.start()
+
+    yield server
+
+    server.stop()
 
 
 @pytest.fixture(scope="session")
-def elasticmq_endpoint_url(docker_ip: str, docker_services: Services) -> str:
-    return "http://{}:{}".format(docker_ip, docker_services.port_for("elasticmq", 9324))
+def sqs_endpoint_url(moto_server: ThreadedMotoServer) -> str:
+    host, port = moto_server.get_host_and_port()
+    return f"http://{host}:{port}"
 
 
 @pytest.fixture
@@ -42,7 +47,7 @@ def dead_letter() -> bool:
 
 @pytest.fixture
 def broker(
-    elasticmq_endpoint_url: str, namespace: str, dead_letter: bool, tags: dict[str, str]
+    sqs_endpoint_url: str, namespace: str, dead_letter: bool, tags: dict[str, str]
 ) -> Iterator[SQSBroker]:
     broker = SQSBroker(
         namespace=namespace,
@@ -56,7 +61,7 @@ def broker(
         dead_letter=dead_letter,
         tags=tags,
         region_name="eu-central-1",
-        endpoint_url=elasticmq_endpoint_url,
+        endpoint_url=sqs_endpoint_url,
         aws_access_key_id="000000000000",
         aws_secret_access_key="000000000000",
     )
