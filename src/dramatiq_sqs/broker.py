@@ -207,41 +207,48 @@ class SQSBroker(dramatiq.Broker):
         self.emit_after("enqueue", message, delay)
         return message
 
-    def join(self, queue_name: str, *, timeout: int | None = None) -> None:
-        queue = self.queuesets[queue_name].queue
+    def get_declared_queues(self) -> Iterable[str]:
+        return self.queuesets.declared_queuesets
 
+    def get_declared_delay_queues(self) -> Iterable[str]:
+        return set()
+
+    def flush(self, queue_name: str) -> None:
+        queue = self.queuesets[queue_name].queue
+        self.client.purge_queue(QueueUrl=queue.url)
+
+    def flush_all(self) -> None:
+        for queue_name in self.get_declared_queues():
+            self.flush(queue_name)
+
+    def get_total_message_count(self, queue_name: str) -> int:
+        queue = self.queuesets[queue_name].queue
+        attributes = self.client.get_queue_attributes(
+            QueueUrl=queue.url,
+            AttributeNames=[
+                "ApproximateNumberOfMessages",
+                "ApproximateNumberOfMessagesDelayed",
+                "ApproximateNumberOfMessagesNotVisible",
+            ],
+        )["Attributes"]
+
+        return sum(map(int, attributes.values()))
+
+    def join(self, queue_name: str, *, timeout: int | None = None) -> None:
         deadline = timeout and time.monotonic() + timeout
 
         while True:
             if deadline and time.monotonic() >= deadline:
                 raise QueueJoinTimeout(queue_name)
 
-            attributes = self.client.get_queue_attributes(
-                QueueUrl=queue.url,
-                AttributeNames=[
-                    "ApproximateNumberOfMessages",
-                    "ApproximateNumberOfMessagesDelayed",
-                    "ApproximateNumberOfMessagesNotVisible",
-                ],
-            )["Attributes"]
-            message_count = sum(
-                (
-                    int(attributes["ApproximateNumberOfMessages"]),
-                    int(attributes["ApproximateNumberOfMessagesDelayed"]),
-                    int(attributes["ApproximateNumberOfMessagesNotVisible"]),
-                )
-            )
-
-            if message_count == 0:
+            if self.get_total_message_count(queue_name) == 0:
                 break
 
-            time.sleep(1)
+            time.sleep(0.02)
 
-    def get_declared_queues(self) -> Iterable[str]:
-        return self.queuesets.declared_queuesets
-
-    def get_declared_delay_queues(self) -> Iterable[str]:
-        return set()
+    def join_all(self) -> None:
+        for queue_name in self.get_declared_queues():
+            self.join(queue_name)
 
 
 class SQSConsumer(dramatiq.Consumer):
@@ -369,7 +376,7 @@ class SQSConsumer(dramatiq.Consumer):
                 # prefetch we don't fetch at all and would otherwise busy
                 # loop until a worker thread frees a slot.
                 self.misses, backoff_ms = compute_backoff(
-                    self.misses, max_backoff=self.wait_time_seconds * 1000 or 1000
+                    self.misses, max_backoff=self.wait_time_seconds * 1000 + 1000
                 )
                 time.sleep(backoff_ms / 1000)
                 return None
