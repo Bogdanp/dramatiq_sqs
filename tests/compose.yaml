@@ -1,5 +1,0 @@
-services:
-  elasticmq:
-    image: softwaremill/elasticmq-native:1.6.15
-    ports:
-      - "9324:9324"
