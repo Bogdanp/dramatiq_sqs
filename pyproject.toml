@@ -34,7 +34,6 @@ dev = [
   "nox-uv",
   "nox",
   "pytest-cov",
-  "pytest-docker",
   "pytest",
   "ruff",
   "ty",
