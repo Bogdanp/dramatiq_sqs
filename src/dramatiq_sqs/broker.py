@@ -124,7 +124,7 @@ class SQSBroker(dramatiq.Broker):
         visibility_timeout: int | None = MAX_VISIBILITY_TIMEOUT_SECONDS,
         max_message_size: int | None = None,
         tags: dict[str, str] | None = None,
-        **options,
+        **options: Any,  # noqa: ANN401
     ) -> None:
         if (
             retention < MIN_MESSAGE_RETENTION_SECONDS
@@ -152,7 +152,7 @@ class SQSBroker(dramatiq.Broker):
         self.visibility_timeout = visibility_timeout
 
     @property
-    def consumer_class(self):
+    def consumer_class(self) -> type["SQSConsumer"]:
         return SQSConsumer
 
     def consume(

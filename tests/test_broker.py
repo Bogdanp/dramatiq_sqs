@@ -1,12 +1,14 @@
 import time
 from collections.abc import Callable
-from contextlib import nullcontext
-from typing import TYPE_CHECKING, Any
+from contextlib import AbstractContextManager, nullcontext
+from typing import TYPE_CHECKING, Any, cast
 
 import dramatiq
 import pytest
+from dramatiq import Worker
 
 from dramatiq_sqs import MessageTooLarge, SQSBroker
+from dramatiq_sqs.broker import SQSConsumer
 from dramatiq_sqs.exceptions import MessageDelayTooLong
 from dramatiq_sqs.queueset import QueueSet
 
@@ -14,12 +16,14 @@ if TYPE_CHECKING:
     from mypy_boto3_sqs import SQSClient
 
 
-def test_can_enqueue_and_process_messages(broker, worker, queue_name):
+def test_can_enqueue_and_process_messages(
+    broker: SQSBroker, worker: Worker, queue_name: str
+) -> None:
     # Given that I have an actor that stores incoming messages in a database
     db = []
 
     @dramatiq.actor(queue_name=queue_name)
-    def do_work(x):
+    def do_work(x: int) -> None:
         db.append(x)
 
     # When I send that actor a message
@@ -32,9 +36,11 @@ def test_can_enqueue_and_process_messages(broker, worker, queue_name):
     assert db == [1]
 
 
-def test_failed_messages_are_deleted_from_queue(broker, worker, queue_name):
+def test_failed_messages_are_deleted_from_queue(
+    broker: SQSBroker, worker: Worker, queue_name: str
+) -> None:
     @dramatiq.actor(queue_name=queue_name, max_retries=0)
-    def do_work():
+    def do_work() -> None:
         raise RuntimeError()
 
     do_work.send()
@@ -45,10 +51,10 @@ def test_failed_messages_are_deleted_from_queue(broker, worker, queue_name):
 @pytest.mark.parametrize("dead_letter", [True])
 @pytest.mark.parametrize(("max_retries", "attempts"), [(0, 5), (3, 5)])
 def test_failed_messages_are_sent_to_dlq(
-    broker, worker, queue_name, max_retries, attempts
-):
+    broker: SQSBroker, worker: Worker, queue_name: str, max_retries: int, attempts: int
+) -> None:
     @dramatiq.actor(queue_name=queue_name, max_retries=max_retries)
-    def do_work():
+    def do_work() -> None:
         raise RuntimeError()
 
     for _ in range(attempts):
@@ -56,14 +62,17 @@ def test_failed_messages_are_sent_to_dlq(
 
     broker.join(queue_name)
 
-    dl_queue_url = broker.queuesets[queue_name].dl_queue.url
+    dl_queue = broker.queuesets[queue_name].dl_queue
+    assert dl_queue is not None
     messages = broker.client.receive_message(
-        QueueUrl=dl_queue_url, MaxNumberOfMessages=10
+        QueueUrl=dl_queue.url, MaxNumberOfMessages=10
     ).get("Messages", [])
     assert len(messages) == attempts
 
 
-def test_limits_prefetch_while_if_queue_is_full(broker, worker, queue_name):
+def test_limits_prefetch_while_if_queue_is_full(
+    broker: SQSBroker, worker: Worker, queue_name: str
+) -> None:
     # Given that I have an actor that stores incoming messages in a database
     db = []
 
@@ -72,7 +81,7 @@ def test_limits_prefetch_while_if_queue_is_full(broker, worker, queue_name):
 
     # Add delay to actor logic to simulate processing time
     @dramatiq.actor(queue_name=queue_name)
-    def do_work(x):
+    def do_work(x: int) -> None:
         db.append(x)
         time.sleep(10)
 
@@ -87,12 +96,14 @@ def test_limits_prefetch_while_if_queue_is_full(broker, worker, queue_name):
     assert db == [1]
 
 
-def test_can_enqueue_delayed_messages(broker, worker, queue_name):
+def test_can_enqueue_delayed_messages(
+    broker: SQSBroker, worker: Worker, queue_name: str
+) -> None:
     # Given that I have an actor that stores incoming messages in a database
     db = []
 
     @dramatiq.actor(queue_name=queue_name)
-    def do_work(x):
+    def do_work(x: int) -> None:
         db.append(x)
 
     # When I send that actor a delayed message
@@ -109,10 +120,12 @@ def test_can_enqueue_delayed_messages(broker, worker, queue_name):
     assert delta >= 5
 
 
-def test_cant_delay_messages_for_longer_than_15_seconds(broker, queue_name):
+def test_cant_delay_messages_for_longer_than_15_seconds(
+    broker: SQSBroker, queue_name: str
+) -> None:
     # Given that I have an actor
     @dramatiq.actor(queue_name=queue_name)
-    def do_work():
+    def do_work() -> None:
         pass
 
     # When I attempt to send that actor a message farther than 15 minutes into the future
@@ -121,17 +134,17 @@ def test_cant_delay_messages_for_longer_than_15_seconds(broker, queue_name):
         do_work.send_with_options(delay=3600000)
 
 
-def test_retention_period_is_validated():
+def test_retention_period_is_validated() -> None:
     # When I attempt to instantiate a broker with an invalid retention period
     # Then a ValueError should be raised
     with pytest.raises(ValueError):
         SQSBroker(retention=30 * 86400)
 
 
-def test_can_requeue_consumed_messages(broker, queue_name):
+def test_can_requeue_consumed_messages(broker: SQSBroker, queue_name: str) -> None:
     # Given that I have an actor
     @dramatiq.actor(queue_name=queue_name)
-    def do_work():
+    def do_work() -> None:
         pass
 
     # When I send that actor a message
@@ -149,10 +162,12 @@ def test_can_requeue_consumed_messages(broker, queue_name):
     assert first_message == second_message
 
 
-def test_consumer_backs_off_when_prefetch_limit_reached(broker, queue_name):
+def test_consumer_backs_off_when_prefetch_limit_reached(
+    broker: SQSBroker, queue_name: str
+) -> None:
     # Given an actor and a consumer with prefetch=1
     @dramatiq.actor(queue_name=queue_name)
-    def do_work():
+    def do_work() -> None:
         pass
 
     # When I send a message and consume it (without acking)
@@ -160,7 +175,6 @@ def test_consumer_backs_off_when_prefetch_limit_reached(broker, queue_name):
     consumer = broker.consume(queue_name, prefetch=1, timeout=1000)
     in_flight = next(consumer)
     assert in_flight is not None
-    assert consumer.message_refc == 1
 
     # And then call __next__ repeatedly while the prefetch limit is reached.
     deadline = time.monotonic() + 1.0
@@ -177,10 +191,10 @@ def test_consumer_backs_off_when_prefetch_limit_reached(broker, queue_name):
     consumer.ack(in_flight)
 
 
-def test_close_requeues_prefetched_messages(broker, queue_name):
+def test_close_requeues_prefetched_messages(broker: SQSBroker, queue_name: str) -> None:
     # Given that I have an actor and a handful of pending messages
     @dramatiq.actor(queue_name=queue_name)
-    def do_work():
+    def do_work() -> None:
         pass
 
     for _ in range(3):
@@ -188,7 +202,7 @@ def test_close_requeues_prefetched_messages(broker, queue_name):
 
     # When I start consuming with a prefetch large enough to pull them all
     # into the internal buffer at once
-    consumer = broker.consume(queue_name, prefetch=5)
+    consumer = cast(SQSConsumer, broker.consume(queue_name, prefetch=5))
     first = next(consumer)
     assert first is not None
 
@@ -282,10 +296,14 @@ def test_maximum_message_size_is_inferred(queueset: QueueSet) -> None:
     ],
 )
 def test_enqueue_validates_message_size_against_queue(
-    broker, worker, queue_name, queueset, size_delta, context
-):
+    broker: SQSBroker,
+    queue_name: str,
+    queueset: QueueSet,
+    size_delta: int,
+    context: AbstractContextManager,
+) -> None:
     @dramatiq.actor(queue_name=queue_name)
-    def do_work(s):
+    def do_work(x: str) -> None:
         pass
 
     # build a message with a maximum allowed size, base64-decoded

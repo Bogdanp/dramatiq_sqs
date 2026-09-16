@@ -1,9 +1,10 @@
 import uuid
-from collections.abc import Iterator
+from collections.abc import Generator
 from typing import TYPE_CHECKING
 
 import dramatiq
 import pytest
+from dramatiq import Worker
 from dramatiq.middleware import AgeLimit, Callbacks, Pipelines, Retries, TimeLimit
 from moto.server import ThreadedMotoServer
 from mypy_boto3_sqs import SQSClient
@@ -16,7 +17,7 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture(scope="session")
-def moto_server():
+def moto_server() -> Generator[ThreadedMotoServer]:
     server = ThreadedMotoServer(port=0)
     server.start()
 
@@ -58,7 +59,7 @@ def broker(
     dead_letter: bool,
     tags: dict[str, str],
     max_message_size_bytes: int | None,
-) -> Iterator[SQSBroker]:
+) -> Generator[SQSBroker]:
     broker = SQSBroker(
         namespace=namespace,
         middleware=[
@@ -94,7 +95,7 @@ def sqs(broker: SQSBroker) -> "SQSClient":
 
 
 @pytest.fixture
-def queue_name(broker: SQSBroker):
+def queue_name(broker: SQSBroker) -> str:
     return f"queue_{uuid.uuid4()}"
 
 
@@ -105,7 +106,7 @@ def queueset(broker: SQSBroker, queue_name: str) -> QueueSet:
 
 
 @pytest.fixture
-def worker(broker):
+def worker(broker: SQSBroker) -> Generator[Worker]:
     worker = dramatiq.Worker(broker)
     worker.start()
     yield worker

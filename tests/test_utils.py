@@ -1,7 +1,7 @@
 from dramatiq_sqs import utils
 
 
-def test_batched_splits_iterators_into_batches():
+def test_batched_splits_iterators_into_batches() -> None:
     # Given that I have a range from 0 to 12
     xs = range(13)
 
