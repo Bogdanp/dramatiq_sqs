@@ -52,8 +52,9 @@ addopts = ["--cov", "src/dramatiq_sqs", "--cov-report", "html"]
 
 [tool.ruff.lint]
 extend-select = [
-  "I",  # isort
-  "UP", # pyupgrade
+  "I",   # isort
+  "UP",  # pyupgrade
+  "ANN", # flake8-annotations
 ]
 
 [tool.ty.src]
