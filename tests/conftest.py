@@ -9,6 +9,7 @@ from moto.server import ThreadedMotoServer
 from mypy_boto3_sqs import SQSClient
 
 from dramatiq_sqs import SQSBroker
+from dramatiq_sqs.queueset import QueueSet
 
 if TYPE_CHECKING:
     from mypy_boto3_sqs import SQSClient
@@ -46,8 +47,17 @@ def dead_letter() -> bool:
 
 
 @pytest.fixture
+def max_message_size_bytes() -> int | None:
+    return None
+
+
+@pytest.fixture
 def broker(
-    sqs_endpoint_url: str, namespace: str, dead_letter: bool, tags: dict[str, str]
+    sqs_endpoint_url: str,
+    namespace: str,
+    dead_letter: bool,
+    tags: dict[str, str],
+    max_message_size_bytes: int | None,
 ) -> Iterator[SQSBroker]:
     broker = SQSBroker(
         namespace=namespace,
@@ -59,12 +69,14 @@ def broker(
             Retries(min_backoff=1000, max_backoff=900000, max_retries=96),
         ],
         dead_letter=dead_letter,
+        max_message_size=max_message_size_bytes,
         tags=tags,
         region_name="eu-central-1",
         endpoint_url=sqs_endpoint_url,
         aws_access_key_id="000000000000",
         aws_secret_access_key="000000000000",
     )
+
     dramatiq.set_broker(broker)
 
     yield broker
@@ -82,8 +94,14 @@ def sqs(broker: SQSBroker) -> "SQSClient":
 
 
 @pytest.fixture
-def queue_name(broker):
+def queue_name(broker: SQSBroker):
     return f"queue_{uuid.uuid4()}"
+
+
+@pytest.fixture
+def queueset(broker: SQSBroker, queue_name: str) -> QueueSet:
+    broker.declare_queue(queue_name)
+    return broker.queuesets[queue_name]
 
 
 @pytest.fixture

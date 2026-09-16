@@ -9,6 +9,7 @@ if TYPE_CHECKING:
 
 
 _SQS_QUEUE_ATTRIBUTES = {
+    "MaximumMessageSize": str,
     "MessageRetentionPeriod": str,
 }
 
@@ -20,6 +21,10 @@ class SQSQueue(NamedTuple):
     name: str
     url: str
     attributes: SQSQueueAttributes
+
+    @property
+    def max_message_size_bytes(self) -> int:
+        return int(self.attributes["MaximumMessageSize"])
 
 
 def _get_sqs_queue_attributes(sqs: "SQSClient", url: str) -> SQSQueueAttributes:

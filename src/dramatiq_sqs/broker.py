@@ -22,9 +22,6 @@ if TYPE_CHECKING:
 # SQS quotas:
 # https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/quotas-messages.html
 
-#: The max number of bytes in a message.
-MAX_MESSAGE_SIZE_BYTES = 1024 * 1024
-
 #: The min and max number of seconds messages may be retained for.
 MIN_MESSAGE_RETENTION_SECONDS = 60
 MAX_MESSAGE_RETENTION_SECONDS = 14 * 86400
@@ -49,13 +46,21 @@ def SQSQueueSetFactory(
     namespace: str | None = None,
     *,
     queue_retention: int,
+    max_message_size_bytes: int | None = None,
     dl_queues_enabled: bool = False,
     dl_queue_retention: int | None = None,
     tags: Tags | None = None,
 ) -> QueueSetFactory[SQSQueue]:
     def factory(name: str) -> QueueSet[SQSQueue]:
+        common_attributes = (
+            {"MaximumMessageSize": str(max_message_size_bytes)}
+            if max_message_size_bytes is not None
+            else {}
+        )
+
         queue_name = "_".join(filter(None, (namespace, name)))
         queue_attributes = {
+            **common_attributes,
             "MessageRetentionPeriod": str(queue_retention),
         }
         queue = ensure_sqs_queue(sqs, queue_name, queue_attributes, tags)
@@ -63,6 +68,7 @@ def SQSQueueSetFactory(
         if dl_queues_enabled:
             dl_queue_name = "_".join(filter(None, (namespace, name, "dlq")))
             dl_queue_attributes = {
+                **common_attributes,
                 "MessageRetentionPeriod": str(dl_queue_retention or queue_retention),
             }
             dl_queue = ensure_sqs_queue(sqs, dl_queue_name, dl_queue_attributes, tags)
@@ -97,9 +103,8 @@ class SQSBroker(dramatiq.Broker):
       dead_letter_retention: The number of seconds messages will be retained for in the
         dead letter queue (if enabled). Defaults to 14 days.
       max_message_size: The maximum size (in bytes) of a base64-encoded message.
-        Messages larger than this raise :class:`MessageTooLarge` on enqueue.
-        Defaults to 1MiB (the SQS maximum), but may be raised for SQS-compatible
-        backends that support larger messages.
+        Messages larger than this raise :class:`MessageTooLarge` on enqueue. Defaults to
+        use each queue's reported `MaximumMessageSize`).
       **options: Additional options that are passed to boto3.
 
     .. _Dramatiq: https://dramatiq.io
@@ -117,7 +122,7 @@ class SQSBroker(dramatiq.Broker):
         dead_letter: bool = False,
         dead_letter_retention: int = MAX_MESSAGE_RETENTION_SECONDS,
         visibility_timeout: int | None = MAX_VISIBILITY_TIMEOUT_SECONDS,
-        max_message_size: int = MAX_MESSAGE_SIZE_BYTES,
+        max_message_size: int | None = None,
         tags: dict[str, str] | None = None,
         **options,
     ) -> None:
@@ -130,15 +135,13 @@ class SQSBroker(dramatiq.Broker):
                 f"{MAX_MESSAGE_RETENTION_SECONDS} seconds."
             )
 
-        if max_message_size < 1:
-            raise ValueError("'max_message_size' must be a positive number of bytes.")
-
         self.client = boto3.client("sqs", **options)
         self.queuesets = QueueSetRegistry[SQSQueue](
             factory=SQSQueueSetFactory(
                 self.client,
                 namespace,
                 queue_retention=retention,
+                max_message_size_bytes=max_message_size,
                 dl_queues_enabled=dead_letter,
                 dl_queue_retention=dead_letter_retention,
                 tags=tags,
@@ -186,9 +189,10 @@ class SQSBroker(dramatiq.Broker):
             )
 
         encoded_message = b64encode(message.encode()).decode()
-        if len(encoded_message) > self.max_message_size:
+        if len(encoded_message) > queue.max_message_size_bytes:
             raise MessageTooLarge(
-                f"Messages in SQS can be at most {self.max_message_size} bytes large."
+                "Message size is over the queue's size limit: "
+                f"{len(encoded_message)} > {queue.max_message_size_bytes}"
             )
 
         self.logger.debug(
