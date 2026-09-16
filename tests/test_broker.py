@@ -1,12 +1,14 @@
 import time
 from collections.abc import Callable
+from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any
 
 import dramatiq
 import pytest
 
-from dramatiq_sqs import SQSBroker
-from dramatiq_sqs.exceptions import MessageDelayTooLong, MessageTooLarge
+from dramatiq_sqs import MessageTooLarge, SQSBroker
+from dramatiq_sqs.exceptions import MessageDelayTooLong
+from dramatiq_sqs.queueset import QueueSet
 
 if TYPE_CHECKING:
     from mypy_boto3_sqs import SQSClient
@@ -117,39 +119,6 @@ def test_cant_delay_messages_for_longer_than_15_seconds(broker, queue_name):
     # Then I should get back a MessageDelayTooLong
     with pytest.raises(MessageDelayTooLong):
         do_work.send_with_options(delay=3600000)
-
-
-def test_cant_enqueue_messages_that_are_too_large(broker, queue_name):
-    # Given that I have an actor
-    @dramatiq.actor(queue_name=queue_name)
-    def do_work(s):
-        pass
-
-    # When I attempt to send that actor a message that's too large after base64 encoding
-    # Then a MessageTooLarge should be raised
-    with pytest.raises(MessageTooLarge):
-        do_work.send("a" * 768 * 1024)
-
-
-def test_max_message_size_is_configurable(broker, queue_name):
-    # Given that I lower the broker's max message size
-    broker.max_message_size = 1024
-
-    @dramatiq.actor(queue_name=queue_name)
-    def do_work(s):
-        pass
-
-    # When I attempt to send a message that exceeds the configured limit
-    # Then a MessageTooLarge should be raised
-    with pytest.raises(MessageTooLarge):
-        do_work.send("a" * 2048)
-
-
-def test_max_message_size_is_validated():
-    # When I attempt to instantiate a broker with a non-positive max message size
-    # Then a ValueError should be raised
-    with pytest.raises(ValueError):
-        SQSBroker(max_message_size=0)
 
 
 def test_retention_period_is_validated():
@@ -284,3 +253,45 @@ def test_declare_queue(
         )["QueueUrl"]
 
         assert sqs.list_queue_tags(QueueUrl=queue_url)["Tags"] == tags
+
+
+@pytest.mark.parametrize(
+    ("max_message_size_bytes"),
+    [(1024 * 1024), (256 * 1024), (128 * 1024)],
+)
+def test_maximum_message_size_is_configurable(
+    queueset: QueueSet, max_message_size_bytes: int
+) -> None:
+    assert queueset.queue.max_message_size_bytes == max_message_size_bytes
+
+
+def test_maximum_message_size_is_inferred(queueset: QueueSet) -> None:
+    # This expected value is hardcoded to moto's default, but the important thing is
+    # that the attribute is read from the queue, without us having configured it.
+    assert queueset.queue.max_message_size_bytes == 1024 * 1024
+
+
+@pytest.mark.parametrize(
+    ("size_delta", "context"),
+    [
+        (+10, pytest.raises(MessageTooLarge)),
+        (+1, pytest.raises(MessageTooLarge)),
+        (0, nullcontext()),
+        (-1, nullcontext()),
+        (-10, nullcontext()),
+    ],
+)
+def test_enqueue_validates_message_size_against_queue(
+    broker, worker, queue_name, queueset, size_delta, context
+):
+    @dramatiq.actor(queue_name=queue_name)
+    def do_work(s):
+        pass
+
+    # build a message with a maximum allowed size, base64-decoded
+    max_size = 3 * queueset.queue.max_message_size_bytes // 4
+    blank_size = len(do_work.message("").encode())
+    padded_arg = "x" * (max_size - blank_size + size_delta)
+
+    with context:
+        do_work.send(padded_arg)
