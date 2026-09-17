@@ -1,4 +1,3 @@
-import uuid
 from collections.abc import Generator
 from typing import TYPE_CHECKING
 
@@ -67,7 +66,7 @@ def broker(
             TimeLimit(),
             Callbacks(),
             Pipelines(),
-            Retries(min_backoff=1000, max_backoff=900000, max_retries=96),
+            Retries(min_backoff=1, max_backoff=10, max_retries=10),
         ],
         dead_letter=dead_letter,
         max_message_size=max_message_size_bytes,
@@ -95,8 +94,8 @@ def sqs(broker: SQSBroker) -> "SQSClient":
 
 
 @pytest.fixture
-def queue_name(broker: SQSBroker) -> str:
-    return f"queue_{uuid.uuid4()}"
+def queue_name() -> str:
+    return "default"
 
 
 @pytest.fixture
@@ -107,7 +106,7 @@ def queueset(broker: SQSBroker, queue_name: str) -> QueueSet:
 
 @pytest.fixture
 def worker(broker: SQSBroker) -> Generator[Worker]:
-    worker = dramatiq.Worker(broker)
+    worker = dramatiq.Worker(broker, worker_timeout=10, worker_threads=2)
     worker.start()
     yield worker
     worker.stop()
