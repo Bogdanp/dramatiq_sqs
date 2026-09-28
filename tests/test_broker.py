@@ -22,7 +22,7 @@ def test_can_enqueue_and_process_messages(
     # Given that I have an actor that stores incoming messages in a database
     db = []
 
-    @dramatiq.actor(queue_name=queue_name)
+    @dramatiq.actor
     def do_work(x: int) -> None:
         db.append(x)
 
@@ -39,7 +39,7 @@ def test_can_enqueue_and_process_messages(
 def test_failed_messages_are_deleted_from_queue(
     broker: SQSBroker, worker: Worker, queue_name: str
 ) -> None:
-    @dramatiq.actor(queue_name=queue_name, max_retries=0)
+    @dramatiq.actor(max_retries=0)
     def do_work() -> None:
         raise RuntimeError()
 
@@ -53,7 +53,7 @@ def test_failed_messages_are_deleted_from_queue(
 def test_failed_messages_are_sent_to_dlq(
     broker: SQSBroker, worker: Worker, queue_name: str, max_retries: int, attempts: int
 ) -> None:
-    @dramatiq.actor(queue_name=queue_name, max_retries=max_retries)
+    @dramatiq.actor(max_retries=max_retries)
     def do_work() -> None:
         raise RuntimeError()
 
@@ -70,30 +70,50 @@ def test_failed_messages_are_sent_to_dlq(
     assert len(messages) == attempts
 
 
+@pytest.mark.parametrize("prefetch", [1, 2, 4])
 def test_limits_prefetch_while_if_queue_is_full(
+    broker: SQSBroker, queue_name: str, prefetch: int
+) -> None:
+    @dramatiq.actor
+    def do_work() -> None:
+        pass
+
+    consumer = broker.consume(queue_name, prefetch=prefetch, timeout=10)
+
+    for _ in range(2 * prefetch):
+        do_work.send()
+
+    for _ in range(prefetch):
+        next(consumer)
+
+    assert next(consumer) is None
+
+
+def test_consumer_backs_off_when_prefetch_limit_reached(
     broker: SQSBroker, worker: Worker, queue_name: str
 ) -> None:
-    # Given that I have an actor that stores incoming messages in a database
-    db = []
+    # Given an actor and a consumer with prefetch=1
+    @dramatiq.actor()
+    def do_work() -> None:
+        pass
 
-    # Set the worker prefetch limit to 1
-    worker.queue_prefetch = 1
+    consumer_timeout_ms = 1000
+    consumer = broker.consume(queue_name, prefetch=1, timeout=consumer_timeout_ms)
 
-    # Add delay to actor logic to simulate processing time
-    @dramatiq.actor(queue_name=queue_name)
-    def do_work(x: int) -> None:
-        db.append(x)
-        time.sleep(10)
+    # When I send a message and consume it, reaching the prefetch limit
+    do_work.send()
+    next(consumer)
 
-    # When I send that actor messages, it'll only prefetch and process a single message
-    do_work.send(1)
-    do_work.send(2)
+    # And then continue to call __next__ while at the limit
+    deadline = time.monotonic() + consumer_timeout_ms / 1000
+    calls = 0
+    while time.monotonic() < deadline:
+        assert next(consumer) is None
+        calls += 1
 
-    # Wait for message to be processed
-    time.sleep(2)
-
-    # Then the db should contain only that message, while it sleeps
-    assert db == [1]
+    # Then the consumer must have backed off so the number of __next__ calls stays small
+    # instead of spinning.
+    assert calls < consumer_timeout_ms / 50
 
 
 def test_can_enqueue_delayed_messages(
@@ -102,7 +122,7 @@ def test_can_enqueue_delayed_messages(
     # Given that I have an actor that stores incoming messages in a database
     db = []
 
-    @dramatiq.actor(queue_name=queue_name)
+    @dramatiq.actor
     def do_work(x: int) -> None:
         db.append(x)
 
@@ -124,7 +144,7 @@ def test_cant_delay_messages_for_longer_than_15_seconds(
     broker: SQSBroker, queue_name: str
 ) -> None:
     # Given that I have an actor
-    @dramatiq.actor(queue_name=queue_name)
+    @dramatiq.actor
     def do_work() -> None:
         pass
 
@@ -143,7 +163,7 @@ def test_retention_period_is_validated() -> None:
 
 def test_can_requeue_consumed_messages(broker: SQSBroker, queue_name: str) -> None:
     # Given that I have an actor
-    @dramatiq.actor(queue_name=queue_name)
+    @dramatiq.actor
     def do_work() -> None:
         pass
 
@@ -162,38 +182,9 @@ def test_can_requeue_consumed_messages(broker: SQSBroker, queue_name: str) -> No
     assert first_message == second_message
 
 
-def test_consumer_backs_off_when_prefetch_limit_reached(
-    broker: SQSBroker, queue_name: str
-) -> None:
-    # Given an actor and a consumer with prefetch=1
-    @dramatiq.actor(queue_name=queue_name)
-    def do_work() -> None:
-        pass
-
-    # When I send a message and consume it (without acking)
-    do_work.send()
-    consumer = broker.consume(queue_name, prefetch=1, timeout=1000)
-    in_flight = next(consumer)
-    assert in_flight is not None
-
-    # And then call __next__ repeatedly while the prefetch limit is reached.
-    deadline = time.monotonic() + 1.0
-    calls = 0
-    while time.monotonic() < deadline:
-        result = next(consumer)
-        assert result is None
-        calls += 1
-
-    # Then the consumer must have backed off so the number of __next__
-    # calls in 1 second stays small instead of spinning.
-    assert calls < 50
-
-    consumer.ack(in_flight)
-
-
 def test_close_requeues_prefetched_messages(broker: SQSBroker, queue_name: str) -> None:
     # Given that I have an actor and a handful of pending messages
-    @dramatiq.actor(queue_name=queue_name)
+    @dramatiq.actor
     def do_work() -> None:
         pass
 
@@ -302,7 +293,7 @@ def test_enqueue_validates_message_size_against_queue(
     size_delta: int,
     context: AbstractContextManager,
 ) -> None:
-    @dramatiq.actor(queue_name=queue_name)
+    @dramatiq.actor()
     def do_work(x: str) -> None:
         pass
 
@@ -313,3 +304,18 @@ def test_enqueue_validates_message_size_against_queue(
 
     with context:
         do_work.send(padded_arg)
+
+
+def test_flush(broker: SQSBroker, queue_name: str) -> None:
+    @dramatiq.actor()
+    def do_work() -> None:
+        pass
+
+    for _ in range(42):
+        do_work.send()
+
+    assert broker.get_total_message_count(queue_name) == 42
+
+    broker.flush(queue_name)
+
+    assert broker.get_total_message_count(queue_name) == 0
