@@ -182,6 +182,32 @@ def test_can_requeue_consumed_messages(broker: SQSBroker, queue_name: str) -> No
     assert first_message == second_message
 
 
+def test_options_set_in_before_enqueue_are_sent(
+    broker: SQSBroker, queue_name: str
+) -> None:
+    # Given that I have a middleware that adds an option before enqueueing
+    class StampMiddleware(dramatiq.Middleware):
+        def before_enqueue(
+            self, broker: dramatiq.Broker, message: dramatiq.Message, delay: int
+        ) -> None:
+            message.options["stamped"] = True
+
+    broker.add_middleware(StampMiddleware())
+
+    # And an actor
+    @dramatiq.actor
+    def do_work() -> None:
+        pass
+
+    # When I send that actor a message
+    do_work.send()
+
+    # Then the consumed message should contain that option
+    message = next(broker.consume(queue_name))
+    assert message is not None
+    assert message.options.get("stamped") is True
+
+
 def test_close_requeues_prefetched_messages(broker: SQSBroker, queue_name: str) -> None:
     # Given that I have an actor and a handful of pending messages
     @dramatiq.actor
