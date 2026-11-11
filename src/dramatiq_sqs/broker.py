@@ -266,7 +266,6 @@ class SQSConsumer(dramatiq.Consumer):
         self.client = client
         self.queue = queue
         self.dl_queue = dl_queue
-        self.prefetch = min(prefetch, MAX_PREFETCH)
 
         self.visibility_timeout = visibility_timeout
 
@@ -287,16 +286,22 @@ class SQSConsumer(dramatiq.Consumer):
                 f"the maximum supported ({MAX_WAIT_TIME_SECONDS})."
             )
 
-        self.messages: deque = deque()
-        self.message_refc = 0
-        self.misses = 0
+        self.prefetch_limit = prefetch
+        if self.prefetch_limit > MAX_PREFETCH:
+            raise ValueError(
+                f"Prefetch limit higher than supported: {prefetch} > {MAX_PREFETCH}"
+            )
+
+        self.prefetch_total = 0
+        self.prefetch_buffer: deque = deque()
+        self.prefetch_backoffs = 0
 
     def ack(self, message: "_SQSMessage") -> None:
         self.client.delete_message(
             QueueUrl=self.queue.url,
             ReceiptHandle=message._sqs_message["ReceiptHandle"],
         )
-        self.message_refc -= 1
+        self.prefetch_total -= 1
 
     def nack(self, message: "_SQSMessage") -> None:
         if self.dl_queue is not None:
@@ -305,29 +310,34 @@ class SQSConsumer(dramatiq.Consumer):
                 MessageBody=message._sqs_message["Body"],
             )
 
-        self.client.delete_message(
-            QueueUrl=self.queue.url,
-            ReceiptHandle=message._sqs_message["ReceiptHandle"],
-        )
-        self.message_refc -= 1
+        self.ack(message)
 
     def requeue(self, messages: Iterable["_SQSMessage"]) -> None:
+        """Terminate the VisibilityTimeout to make the messages immediately visible
+        again.
+        """
         for batch in utils.batched(messages, 10):
-            # Setting the VisibilityTimeout to 0 makes the messages immediately visible again.
+            entries = [
+                {
+                    "Id": str(i),
+                    "ReceiptHandle": message._sqs_message["ReceiptHandle"],
+                    "VisibilityTimeout": 0,
+                }
+                for i, message in enumerate(batch)
+            ]
             response = self.client.change_message_visibility_batch(
-                QueueUrl=self.queue.url,
-                Entries=[
-                    {
-                        "Id": str(i),
-                        "ReceiptHandle": message._sqs_message["ReceiptHandle"],
-                        "VisibilityTimeout": 0,
-                    }
-                    for i, message in enumerate(batch)
-                ],
+                QueueUrl=self.queue.url, Entries=entries
             )
+            # The above is best-effort - while the API may report failures to change the
+            # timeout for some messages, the possible reasons all boil down to us having
+            # lost control over a message, which a) shouldn't happen unless there is
+            # a bug elsewhere, and b) we can do nothing about anyway.
+            for fail in response.get("Failed", []):
+                self.logger.exception(
+                    "Failed to change message visibility: %s", fail.get("Message", "")
+                )
 
-            requeued_messages = response.get("Successful", [])
-            self.message_refc -= len(requeued_messages)
+            self.prefetch_total -= len(entries)
 
     def close(self) -> None:
         # Drain the prefetch buffer: messages fetched from SQS but never
@@ -335,51 +345,57 @@ class SQSConsumer(dramatiq.Consumer):
         # expires. ``Worker.stop`` drains ``work_queue`` and ``delay_queue``
         # but has no awareness of this internal buffer, so ``close`` is the
         # last hook to put them back.
-        buffered, self.messages = list(self.messages), deque()
-        if buffered:
-            self.requeue(buffered)
+        self.requeue(self.prefetch_buffer)
+        self.prefetch_buffer = deque()
 
-    def __next__(self) -> dramatiq.Message | None:
-        kw: dict[str, Any] = {
-            "MaxNumberOfMessages": self.prefetch,
-            "WaitTimeSeconds": self.wait_time_seconds,
-        }
+    def _fetch_messages(
+        self, max_number: int = MAX_PREFETCH
+    ) -> Iterable[dramatiq.MessageProxy]:
         if self.visibility_timeout is not None:
-            kw["VisibilityTimeout"] = self.visibility_timeout
+            optional_kwargs = {"VisibilityTimeout": self.visibility_timeout}
+        else:
+            optional_kwargs = {}
 
-        try:
-            message = self.messages.popleft()
-            self.misses = 0
-            return message
-        except IndexError:
-            if self.message_refc < self.prefetch:
-                response = self.client.receive_message(QueueUrl=self.queue.url, **kw)
-                for sqs_message in response.get("Messages", []):
-                    try:
-                        encoded_message = b64decode(sqs_message["Body"])
-                        dramatiq_message = dramatiq.Message.decode(encoded_message)
-                        self.messages.append(_SQSMessage(sqs_message, dramatiq_message))
-                        self.message_refc += 1
-                    except Exception:  # pragma: no cover
-                        self.logger.exception(
-                            "Failed to decode message: %r", sqs_message["Body"]
-                        )
+        sqs_messages = self.client.receive_message(
+            QueueUrl=self.queue.url,
+            MaxNumberOfMessages=max_number,
+            WaitTimeSeconds=self.wait_time_seconds,
+            **optional_kwargs,
+        ).get("Messages", [])
 
+        for sqs_message in sqs_messages:
             try:
-                message = self.messages.popleft()
-                self.misses = 0
-                return message
-            except IndexError:
-                # Back off to avoid spinning when the prefetch limit is
-                # reached or no messages are available. SQS long-polling
-                # already throttles fetches, but when message_refc >=
-                # prefetch we don't fetch at all and would otherwise busy
-                # loop until a worker thread frees a slot.
-                self.misses, backoff_ms = compute_backoff(
-                    self.misses, max_backoff=self.wait_time_seconds * 1000 + 1000
+                encoded_body = b64decode(sqs_message["Body"])
+                dramatiq_message = dramatiq.Message.decode(encoded_body)
+                yield _SQSMessage(sqs_message, dramatiq_message)
+            except Exception:
+                self.logger.exception(
+                    "Failed to decode message: %r", sqs_message["Body"]
+                )
+
+    def __next__(self) -> dramatiq.MessageProxy | None:
+        """Return a single message from the prefetch buffer. If the buffer is empty,
+        first try to fill it once, up to ``prefetch_limit``.
+        """
+        if not self.prefetch_buffer:
+            # Dramatiq's logic is to include in-progress messages in ``prefetch_limit``,
+            # so we may still have an empty buffer but enough in-progress messages -
+            # in this case we stall for up ``wait_time_seconds`` to not waste CPU.
+            if self.prefetch_total >= self.prefetch_limit:
+                self.prefetch_backoffs, backoff_ms = compute_backoff(
+                    self.prefetch_backoffs, max_backoff=self.wait_time_seconds * 1000
                 )
                 time.sleep(backoff_ms / 1000)
                 return None
+
+            self.prefetch_buffer = deque(self._fetch_messages(self.prefetch_limit))
+            self.prefetch_total += len(self.prefetch_buffer)
+            self.prefetch_backoffs = 0
+
+        try:
+            return self.prefetch_buffer.popleft()
+        except IndexError:
+            return None
 
 
 class _SQSMessage(dramatiq.MessageProxy):

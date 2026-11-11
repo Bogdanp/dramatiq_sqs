@@ -70,6 +70,27 @@ def test_failed_messages_are_sent_to_dlq(
     assert len(messages) == attempts
 
 
+@pytest.mark.parametrize(
+    "prefetch",
+    [1, 2, 4, 8],
+)
+def test_prefetches_on_next(broker: SQSBroker, queue_name: str, prefetch: int) -> None:
+    @dramatiq.actor
+    def do_work() -> None:
+        pass
+
+    consumer = broker.consume(queue_name, prefetch=prefetch, timeout=10)
+    consumer = cast(SQSConsumer, consumer)
+
+    for _ in range(2 * prefetch):
+        do_work.send()
+
+    assert next(consumer) is not None
+
+    assert consumer.prefetch_total == prefetch
+    assert len(consumer.prefetch_buffer) == prefetch - 1
+
+
 @pytest.mark.parametrize("prefetch", [1, 2, 4])
 def test_limits_prefetch_while_if_queue_is_full(
     broker: SQSBroker, queue_name: str, prefetch: int
@@ -79,6 +100,7 @@ def test_limits_prefetch_while_if_queue_is_full(
         pass
 
     consumer = broker.consume(queue_name, prefetch=prefetch, timeout=10)
+    consumer = cast(SQSConsumer, consumer)
 
     for _ in range(2 * prefetch):
         do_work.send()
@@ -87,6 +109,8 @@ def test_limits_prefetch_while_if_queue_is_full(
         next(consumer)
 
     assert next(consumer) is None
+    assert consumer.prefetch_total == prefetch
+    assert len(consumer.prefetch_buffer) == 0
 
 
 def test_consumer_backs_off_when_prefetch_limit_reached(
@@ -114,6 +138,39 @@ def test_consumer_backs_off_when_prefetch_limit_reached(
     # Then the consumer must have backed off so the number of __next__ calls stays small
     # instead of spinning.
     assert calls < consumer_timeout_ms / 50
+
+
+def test_close_requeues_prefetched_messages(broker: SQSBroker, queue_name: str) -> None:
+    # Given that I have an actor and a handful of pending messages
+    @dramatiq.actor
+    def do_work() -> None:
+        pass
+
+    for _ in range(3):
+        do_work.send()
+
+    # When I start consuming with a prefetch large enough to pull them all
+    # into the internal buffer at once
+    consumer = broker.consume(queue_name, prefetch=5)
+    consumer = cast(SQSConsumer, consumer)
+
+    assert next(consumer) is not None
+
+    # Then there should be buffered messages that haven't been returned yet
+    buffered_count = len(consumer.prefetch_buffer)
+    assert buffered_count >= 1
+
+    # When I close the consumer
+    consumer.close()
+
+    # Then the internal buffer is drained
+    assert len(consumer.prefetch_buffer) == 0
+
+    # And a fresh consumer can read the buffered messages immediately —
+    # meaning they were requeued, not left invisible until VisibilityTimeout.
+    new_consumer = broker.consume(queue_name, prefetch=5)
+    for _ in range(buffered_count):
+        assert next(new_consumer) is not None
 
 
 def test_can_enqueue_delayed_messages(
@@ -206,38 +263,6 @@ def test_options_set_in_before_enqueue_are_sent(
     message = next(broker.consume(queue_name))
     assert message is not None
     assert message.options.get("stamped") is True
-
-
-def test_close_requeues_prefetched_messages(broker: SQSBroker, queue_name: str) -> None:
-    # Given that I have an actor and a handful of pending messages
-    @dramatiq.actor
-    def do_work() -> None:
-        pass
-
-    for _ in range(3):
-        do_work.send()
-
-    # When I start consuming with a prefetch large enough to pull them all
-    # into the internal buffer at once
-    consumer = cast(SQSConsumer, broker.consume(queue_name, prefetch=5))
-    first = next(consumer)
-    assert first is not None
-
-    # Then there should be buffered messages that haven't been returned yet
-    buffered_count = len(consumer.messages)
-    assert buffered_count >= 1
-
-    # When I close the consumer
-    consumer.close()
-
-    # Then the internal buffer is drained
-    assert len(consumer.messages) == 0
-
-    # And a fresh consumer can read the buffered messages immediately —
-    # meaning they were requeued, not left invisible until VisibilityTimeout.
-    new_consumer = broker.consume(queue_name, prefetch=5)
-    for _ in range(buffered_count):
-        assert next(new_consumer) is not None
 
 
 @pytest.fixture(params=["consume", "enqueue"])
