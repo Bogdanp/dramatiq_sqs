@@ -235,16 +235,24 @@ class SQSBroker(dramatiq.Broker):
         return sum(map(int, attributes.values()))
 
     def join(self, queue_name: str, *, timeout: int | None = None) -> None:
-        deadline = timeout and time.monotonic() + timeout
+        # At least in some mock server implementations, a message changing state is not
+        # reflected in the queue attributes atomically; e.g. when a single message in a
+        # queue goes from delayed to visible, both ApproximateNumberOfMessagesDelayed
+        # and ApproximateNumberOfMessages may be 0 for a brief moment. To avoid
+        # returning too early, wait for the count to stabilize after a scientifically
+        # chosen number of checks.
+        counts = deque([float("inf")], maxlen=3)
+        deadline = time.monotonic() + timeout if timeout else float("inf")
 
-        while True:
-            if deadline and time.monotonic() >= deadline:
-                raise QueueJoinTimeout(queue_name)
+        while time.monotonic() < deadline:
+            counts.append(self.get_total_message_count(queue_name))
 
-            if self.get_total_message_count(queue_name) == 0:
-                break
+            if sum(counts) == 0:
+                return
 
             time.sleep(0.02)
+        else:
+            raise QueueJoinTimeout(queue_name)
 
     def join_all(self) -> None:
         for queue_name in self.get_declared_queues():
