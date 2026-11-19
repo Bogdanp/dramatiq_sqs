@@ -1,7 +1,13 @@
-from nox import Session, options
+from functools import partial
+
+from nox import Session
 from nox_uv import session
 
-options.default_venv_backend = "uv"
+session = partial(
+    session,
+    venv_backend="uv",
+    uv_sync_locked=True,
+)
 
 PYTHONS = ["3.10", "3.11", "3.12", "3.13", "3.14"]
 

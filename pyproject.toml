@@ -19,8 +19,8 @@ classifiers = [
 version = "0.5.0"
 requires-python = ">=3.10"
 dependencies = [
-  "boto3",
-  "dramatiq",
+  "boto3>=1.41.0",
+  "dramatiq>=2.0,<=3.0",
   "typing-extensions >= 4.15.0 ; python_full_version < '3.11'",
 ]
 
@@ -29,22 +29,23 @@ Repository = "https://github.com/Bogdanp/dramatiq_sqs"
 
 [dependency-groups]
 dev = [
-  "boto3-stubs[boto3,sqs]",
-  "moto[server]",
-  "nox-uv",
-  "nox",
-  "pytest-cov",
-  "pytest",
-  "ruff",
-  "ty",
+  "boto3-stubs[boto3,sqs]>=1.41.0",
+  "moto[server]>=5.2.5",
+  "nox-uv>=0.8.0",
+  "nox>=2026.10.20",
+  "pytest-cov>=7.1.0",
+  "pytest>=9.2.0",
+  "ruff>=0.17.4",
+  "ty>=0.0.101",
 ]
 
 [build-system]
-requires = ["uv_build>=0.11.6,<0.12.0"]
+requires = ["uv_build>=0.13.0"]
 build-backend = "uv_build"
 
 [tool.uv]
-required-version = ">=0.11.6,<0.12.0"
+exclude-newer = "7 days"
+required-version = ">=0.13.0"
 
 [tool.pytest]
 testpaths = ["tests"]
