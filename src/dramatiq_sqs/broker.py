@@ -300,16 +300,15 @@ class SQSConsumer(dramatiq.Consumer):
                 f"Prefetch limit higher than supported: {prefetch} > {MAX_PREFETCH}"
             )
 
-        self.prefetch_total = 0
         self.prefetch_buffer: deque = deque()
         self.prefetch_backoffs = 0
 
+        self.receipts: set[str] = set()
+
     def ack(self, message: "_SQSMessage") -> None:
-        self.client.delete_message(
-            QueueUrl=self.queue.url,
-            ReceiptHandle=message._sqs_message["ReceiptHandle"],
-        )
-        self.prefetch_total -= 1
+        receipt = message._sqs_message["ReceiptHandle"]
+        self.client.delete_message(QueueUrl=self.queue.url, ReceiptHandle=receipt)
+        self.receipts.remove(receipt)
 
     def nack(self, message: "_SQSMessage") -> None:
         if self.dl_queue is not None:
@@ -324,14 +323,12 @@ class SQSConsumer(dramatiq.Consumer):
         """Terminate the VisibilityTimeout to make the messages immediately visible
         again.
         """
-        for batch in utils.batched(messages, 10):
+        receipts = {m._sqs_message["ReceiptHandle"] for m in messages}
+
+        for batch in utils.batched(receipts, 10):
             entries = [
-                {
-                    "Id": str(i),
-                    "ReceiptHandle": message._sqs_message["ReceiptHandle"],
-                    "VisibilityTimeout": 0,
-                }
-                for i, message in enumerate(batch)
+                {"Id": str(i), "ReceiptHandle": receipt, "VisibilityTimeout": 0}
+                for i, receipt in enumerate(batch)
             ]
             response = self.client.change_message_visibility_batch(
                 QueueUrl=self.queue.url, Entries=entries
@@ -345,7 +342,7 @@ class SQSConsumer(dramatiq.Consumer):
                     "Failed to change message visibility: %s", fail.get("Message", "")
                 )
 
-            self.prefetch_total -= len(entries)
+        self.receipts -= receipts
 
     def close(self) -> None:
         # Drain the prefetch buffer: messages fetched from SQS but never
@@ -371,6 +368,8 @@ class SQSConsumer(dramatiq.Consumer):
             **optional_kwargs,
         ).get("Messages", [])
 
+        self.receipts |= {m["ReceiptHandle"] for m in sqs_messages}
+
         for sqs_message in sqs_messages:
             try:
                 encoded_body = b64decode(sqs_message["Body"])
@@ -380,6 +379,10 @@ class SQSConsumer(dramatiq.Consumer):
                 self.logger.exception(
                     "Failed to decode message: %r", sqs_message["Body"]
                 )
+
+    @property
+    def prefetch_total(self) -> int:
+        return len(self.receipts)
 
     def __next__(self) -> dramatiq.MessageProxy | None:
         """Return a single message from the prefetch buffer. If the buffer is empty,
@@ -397,7 +400,6 @@ class SQSConsumer(dramatiq.Consumer):
                 return None
 
             self.prefetch_buffer = deque(self._fetch_messages(self.prefetch_limit))
-            self.prefetch_total += len(self.prefetch_buffer)
             self.prefetch_backoffs = 0
 
         try:
