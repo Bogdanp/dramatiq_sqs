@@ -16,10 +16,17 @@ authorization works, check out its [docs].
 
 ## Usage
 
-``` python
+```python
 import dramatiq
 
-from dramatiq.middleware import AgeLimit, TimeLimit, Callbacks, Pipelines, Prometheus, Retries
+from dramatiq.middleware import (
+    AgeLimit,
+    TimeLimit,
+    Callbacks,
+    Pipelines,
+    Prometheus,
+    Retries,
+)
 from dramatiq_sqs import SQSBroker
 
 broker = SQSBroker(
