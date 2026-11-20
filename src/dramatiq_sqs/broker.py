@@ -2,6 +2,7 @@ import time
 from base64 import b64decode, b64encode
 from collections import deque
 from collections.abc import Iterable
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
 import boto3
@@ -11,13 +12,17 @@ from dramatiq.errors import QueueJoinTimeout
 from dramatiq.logging import get_logger
 
 from dramatiq_sqs import utils
+from dramatiq_sqs._types import Broker, Consumer
 from dramatiq_sqs.exceptions import MessageDelayTooLong, MessageTooLarge
 from dramatiq_sqs.queueset import QueueSet, QueueSetFactory, QueueSetRegistry
 from dramatiq_sqs.sqs_queue import SQSQueue, Tags, ensure_sqs_queue
 
 if TYPE_CHECKING:
     from mypy_boto3_sqs import SQSClient
-    from mypy_boto3_sqs.type_defs import MessageTypeDef
+    from mypy_boto3_sqs.type_defs import (
+        ChangeMessageVisibilityBatchRequestEntryTypeDef,
+        MessageTypeDef,
+    )
 
 # SQS quotas:
 # https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/quotas-messages.html
@@ -80,7 +85,7 @@ def SQSQueueSetFactory(
     return factory
 
 
-class SQSBroker(dramatiq.Broker):
+class SQSBroker(Broker):
     """A Dramatiq_ broker that can be used with `Amazon SQS`_
 
     This backend has a number of limitations compared to the built-in
@@ -160,8 +165,8 @@ class SQSBroker(dramatiq.Broker):
         queue_name: str,
         prefetch: int = 1,
         timeout: int = MAX_WAIT_TIME_SECONDS * 1000,
-    ) -> dramatiq.Consumer:
-        return self.consumer_class(
+    ) -> Consumer[Any]:
+        return SQSConsumer(
             self.client,
             self.queuesets[queue_name].queue,
             prefetch,
@@ -207,10 +212,10 @@ class SQSBroker(dramatiq.Broker):
         self.emit_after("enqueue", message, delay)
         return message
 
-    def get_declared_queues(self) -> Iterable[str]:
+    def get_declared_queues(self) -> set[str]:
         return self.queuesets.declared_queuesets
 
-    def get_declared_delay_queues(self) -> Iterable[str]:
+    def get_declared_delay_queues(self) -> set[str]:
         return set()
 
     def flush(self, queue_name: str) -> None:
@@ -251,15 +256,24 @@ class SQSBroker(dramatiq.Broker):
                 return
 
             time.sleep(0.02)
-        else:
-            raise QueueJoinTimeout(queue_name)
+
+        raise QueueJoinTimeout(queue_name)
 
     def join_all(self) -> None:
         for queue_name in self.get_declared_queues():
             self.join(queue_name)
 
 
-class SQSConsumer(dramatiq.Consumer):
+class _SQSMessage(dramatiq.MessageProxy):
+    def __init__(
+        self, sqs_message: "MessageTypeDef", message: dramatiq.Message
+    ) -> None:
+        super().__init__(message)
+
+        self._sqs_message = sqs_message
+
+
+class SQSConsumer(Consumer[_SQSMessage]):
     def __init__(
         self,
         client: "SQSClient",
@@ -304,14 +318,14 @@ class SQSConsumer(dramatiq.Consumer):
         self.prefetch_buffer: deque = deque()
         self.prefetch_backoffs = 0
 
-    def ack(self, message: "_SQSMessage") -> None:
+    def ack(self, message: _SQSMessage) -> None:
         self.client.delete_message(
             QueueUrl=self.queue.url,
             ReceiptHandle=message._sqs_message["ReceiptHandle"],
         )
         self.prefetch_total -= 1
 
-    def nack(self, message: "_SQSMessage") -> None:
+    def nack(self, message: _SQSMessage) -> None:
         if self.dl_queue is not None:
             self.client.send_message(
                 QueueUrl=self.dl_queue.url,
@@ -320,12 +334,12 @@ class SQSConsumer(dramatiq.Consumer):
 
         self.ack(message)
 
-    def requeue(self, messages: Iterable["_SQSMessage"]) -> None:
+    def requeue(self, messages: Iterable[_SQSMessage]) -> None:
         """Terminate the VisibilityTimeout to make the messages immediately visible
         again.
         """
         for batch in utils.batched(messages, 10):
-            entries = [
+            entries: list[ChangeMessageVisibilityBatchRequestEntryTypeDef] = [
                 {
                     "Id": str(i),
                     "ReceiptHandle": message._sqs_message["ReceiptHandle"],
@@ -356,19 +370,18 @@ class SQSConsumer(dramatiq.Consumer):
         self.requeue(self.prefetch_buffer)
         self.prefetch_buffer = deque()
 
-    def _fetch_messages(
-        self, max_number: int = MAX_PREFETCH
-    ) -> Iterable[dramatiq.MessageProxy]:
+    def _fetch_messages(self, max_number: int = MAX_PREFETCH) -> Iterable[_SQSMessage]:
         if self.visibility_timeout is not None:
-            optional_kwargs = {"VisibilityTimeout": self.visibility_timeout}
+            receive_message = partial(
+                self.client.receive_message, VisibilityTimeout=self.visibility_timeout
+            )
         else:
-            optional_kwargs = {}
+            receive_message = self.client.receive_message
 
-        sqs_messages = self.client.receive_message(
+        sqs_messages = receive_message(
             QueueUrl=self.queue.url,
             MaxNumberOfMessages=max_number,
             WaitTimeSeconds=self.wait_time_seconds,
-            **optional_kwargs,
         ).get("Messages", [])
 
         for sqs_message in sqs_messages:
@@ -381,7 +394,7 @@ class SQSConsumer(dramatiq.Consumer):
                     "Failed to decode message: %r", sqs_message["Body"]
                 )
 
-    def __next__(self) -> dramatiq.MessageProxy | None:
+    def __next__(self) -> _SQSMessage | None:
         """Return a single message from the prefetch buffer. If the buffer is empty,
         first try to fill it once, up to ``prefetch_limit``.
         """
@@ -404,12 +417,3 @@ class SQSConsumer(dramatiq.Consumer):
             return self.prefetch_buffer.popleft()
         except IndexError:
             return None
-
-
-class _SQSMessage(dramatiq.MessageProxy):
-    def __init__(
-        self, sqs_message: "MessageTypeDef", message: dramatiq.Message
-    ) -> None:
-        super().__init__(message)
-
-        self._sqs_message = sqs_message
