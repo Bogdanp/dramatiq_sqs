@@ -1,12 +1,12 @@
 from collections.abc import Generator
 from typing import TYPE_CHECKING
 
+import boto3
 import dramatiq
 import pytest
 from dramatiq import Worker
 from dramatiq.middleware import AgeLimit, Callbacks, Pipelines, Retries, TimeLimit
 from moto.server import ThreadedMotoServer
-from mypy_boto3_sqs import SQSClient
 
 from dramatiq_sqs import SQSBroker
 from dramatiq_sqs.queueset import QueueSet
@@ -32,6 +32,17 @@ def sqs_endpoint_url(moto_server: ThreadedMotoServer) -> str:
 
 
 @pytest.fixture
+def client(sqs_endpoint_url: str) -> "SQSClient":
+    return boto3.client(
+        "sqs",
+        region_name="eu-central-1",
+        endpoint_url=sqs_endpoint_url,
+        aws_access_key_id="000000000000",
+        aws_secret_access_key="000000000000",
+    )
+
+
+@pytest.fixture
 def namespace() -> str:
     return "pytest"
 
@@ -53,13 +64,14 @@ def max_message_size_bytes() -> int | None:
 
 @pytest.fixture
 def broker(
-    sqs_endpoint_url: str,
+    client: "SQSClient",
     namespace: str,
     dead_letter: bool,
     tags: dict[str, str],
     max_message_size_bytes: int | None,
 ) -> Generator[SQSBroker]:
     broker = SQSBroker(
+        client,
         namespace=namespace,
         middleware=[
             AgeLimit(),
@@ -71,10 +83,6 @@ def broker(
         dead_letter=dead_letter,
         max_message_size=max_message_size_bytes,
         tags=tags,
-        region_name="eu-central-1",
-        endpoint_url=sqs_endpoint_url,
-        aws_access_key_id="000000000000",
-        aws_secret_access_key="000000000000",
     )
 
     dramatiq.set_broker(broker)
