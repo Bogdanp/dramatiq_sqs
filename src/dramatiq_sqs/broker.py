@@ -100,6 +100,8 @@ class SQSBroker(Broker):
     authorization works, check out its docs_.
 
     Parameters:
+      client: An optional `boto3.Client` for SQS. If not provided, an instance will be
+        created with default boto3 configuration.
       namespace: The prefix to use when creating queues.
       middleware: The set of middleware that apply to this broker.
       retention: The number of seconds messages will be retained for in the queue.
@@ -110,7 +112,6 @@ class SQSBroker(Broker):
       max_message_size: The maximum size (in bytes) of a base64-encoded message.
         Messages larger than this raise :class:`MessageTooLarge` on enqueue. Defaults to
         use each queue's reported `MaximumMessageSize`).
-      **options: Additional options that are passed to boto3.
 
     .. _Dramatiq: https://dramatiq.io
     .. _Amazon SQS: https://aws.amazon.com/sqs/
@@ -120,6 +121,7 @@ class SQSBroker(Broker):
 
     def __init__(
         self,
+        client: "SQSClient | None" = None,
         *,
         namespace: str | None = None,
         middleware: list[dramatiq.Middleware] | None = None,
@@ -129,7 +131,6 @@ class SQSBroker(Broker):
         visibility_timeout: int | None = MAX_VISIBILITY_TIMEOUT_SECONDS,
         max_message_size: int | None = None,
         tags: dict[str, str] | None = None,
-        **options: Any,  # noqa: ANN401
     ) -> None:
         if (
             retention < MIN_MESSAGE_RETENTION_SECONDS
@@ -140,7 +141,7 @@ class SQSBroker(Broker):
                 f"{MAX_MESSAGE_RETENTION_SECONDS} seconds."
             )
 
-        self.client = boto3.client("sqs", **options)
+        self.client = client or boto3.client("sqs")
         self.queuesets = QueueSetRegistry[SQSQueue](
             factory=SQSQueueSetFactory(
                 self.client,
