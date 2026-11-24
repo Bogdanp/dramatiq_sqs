@@ -1,14 +1,13 @@
 import time
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 import dramatiq
 import pytest
 from dramatiq import Worker
 
 from dramatiq_sqs import MessageTooLarge, SQSBroker
-from dramatiq_sqs.broker import SQSConsumer
 from dramatiq_sqs.exceptions import MessageDelayTooLong
 from dramatiq_sqs.queueset import QueueSet
 
@@ -80,7 +79,6 @@ def test_prefetches_on_next(broker: SQSBroker, queue_name: str, prefetch: int) -
         pass
 
     consumer = broker.consume(queue_name, prefetch=prefetch, timeout=10)
-    consumer = cast(SQSConsumer, consumer)
 
     for _ in range(2 * prefetch):
         do_work.send()
@@ -100,7 +98,6 @@ def test_limits_prefetch_while_if_queue_is_full(
         pass
 
     consumer = broker.consume(queue_name, prefetch=prefetch, timeout=10)
-    consumer = cast(SQSConsumer, consumer)
 
     for _ in range(2 * prefetch):
         do_work.send()
@@ -152,7 +149,6 @@ def test_close_requeues_prefetched_messages(broker: SQSBroker, queue_name: str) 
     # When I start consuming with a prefetch large enough to pull them all
     # into the internal buffer at once
     consumer = broker.consume(queue_name, prefetch=5)
-    consumer = cast(SQSConsumer, consumer)
 
     assert next(consumer) is not None
 
@@ -230,6 +226,7 @@ def test_can_requeue_consumed_messages(broker: SQSBroker, queue_name: str) -> No
     # And consume the message off the queue
     consumer = broker.consume(queue_name)
     first_message = next(consumer)
+    assert first_message is not None
 
     # And requeue the message
     consumer.requeue([first_message])
