@@ -10,8 +10,7 @@ from dramatiq import Worker
 from dramatiq_sqs import MessageTooLarge, SQSBroker
 from dramatiq_sqs.broker import SQSConsumer
 from dramatiq_sqs.exceptions import MessageDelayTooLong
-from dramatiq_sqs.queueset import QueueSet
-from dramatiq_sqs.sqs_queue import SQSQueueAttributes
+from dramatiq_sqs.sqs_queue import SQSQueue, SQSQueueAttributes
 
 if TYPE_CHECKING:
     from mypy_boto3_sqs import SQSClient
@@ -49,10 +48,14 @@ def test_failed_messages_are_deleted_from_queue(
     broker.join(queue_name)
 
 
-@pytest.mark.parametrize("dl_queues_enabled", [True])
 @pytest.mark.parametrize(("max_retries", "attempts"), [(0, 5), (3, 5)])
 def test_failed_messages_are_sent_to_dlq(
-    broker: SQSBroker, worker: Worker, queue_name: str, max_retries: int, attempts: int
+    broker: SQSBroker,
+    worker: Worker,
+    queue_name: str,
+    dl_queue: SQSQueue,
+    max_retries: int,
+    attempts: int,
 ) -> None:
     @dramatiq.actor(max_retries=max_retries)
     def do_work() -> None:
@@ -63,11 +66,12 @@ def test_failed_messages_are_sent_to_dlq(
 
     broker.join(queue_name)
 
-    dl_queue = broker.queuesets[queue_name].dl_queue
     assert dl_queue is not None
+
     messages = broker.client.receive_message(
         QueueUrl=dl_queue.url, MaxNumberOfMessages=10
     ).get("Messages", [])
+
     assert len(messages) == attempts
 
 
@@ -314,9 +318,23 @@ def test_declare_queue(
     ],
 )
 def test_queue_attributes_are_configurable(
-    queueset: QueueSet, queue_attributes: SQSQueueAttributes
+    queue: SQSQueue, queue_attributes: SQSQueueAttributes
 ) -> None:
-    assert queueset.queue.attributes.items() >= queue_attributes.items()
+    assert queue.attributes.items() >= queue_attributes.items()
+
+
+@pytest.mark.parametrize(
+    ("dl_queue_attributes"),
+    [
+        {"MessageRetentionPeriod": str(48 * 3600), "VisibilityTimeout": str(42)},
+        {"MaximumMessageSize": str(1024 * 1024), "DelaySeconds": str(255)},
+    ],
+)
+def test_dead_letter_queue_attributes_are_configurable(
+    dl_queue: SQSQueue | None, dl_queue_attributes: SQSQueueAttributes
+) -> None:
+    assert dl_queue is not None
+    assert dl_queue.attributes.items() >= dl_queue_attributes.items()
 
 
 @pytest.mark.parametrize(
@@ -328,15 +346,15 @@ def test_queue_attributes_are_configurable(
     ],
 )
 def test_maximum_message_size_is_configurable(
-    queueset: QueueSet, max_message_size_bytes: int
+    queue: SQSQueue, max_message_size_bytes: int
 ) -> None:
-    assert queueset.queue.max_message_size_bytes == max_message_size_bytes
+    assert queue.max_message_size_bytes == max_message_size_bytes
 
 
-def test_maximum_message_size_is_inferred(queueset: QueueSet) -> None:
+def test_maximum_message_size_is_inferred(queue: SQSQueue) -> None:
     # This expected value is hardcoded to moto's default, but the important thing is
     # that the attribute is read from the queue, without us having configured it.
-    assert queueset.queue.max_message_size_bytes == 1024 * 1024
+    assert queue.max_message_size_bytes == 1024 * 1024
 
 
 @pytest.mark.parametrize(
@@ -350,9 +368,7 @@ def test_maximum_message_size_is_inferred(queueset: QueueSet) -> None:
     ],
 )
 def test_enqueue_validates_message_size_against_queue(
-    broker: SQSBroker,
-    queue_name: str,
-    queueset: QueueSet,
+    queue: SQSQueue,
     size_delta: int,
     context: AbstractContextManager,
 ) -> None:
@@ -361,7 +377,7 @@ def test_enqueue_validates_message_size_against_queue(
         pass
 
     # build a message with a maximum allowed size, base64-decoded
-    max_size = 3 * queueset.queue.max_message_size_bytes // 4
+    max_size = 3 * queue.max_message_size_bytes // 4
     blank_size = len(do_work.message("").encode())
     padded_arg = "x" * (max_size - blank_size + size_delta)
 

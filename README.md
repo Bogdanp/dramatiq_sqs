@@ -43,12 +43,26 @@ broker = SQSBroker(
 dramatiq.set_broker(broker)
 ```
 
+## Dead-letter queues
+DLQs are enabled and used by default.
+Note that SQS-native "dead-letter queues" aka redrive policies are _not_ used.
+These are normal queues and the nacks are handled client-side by Dramatiq.
+
+DLQs may be disabled globally, in this case failed messages will simply get deleted:
+```py
+broker = SQSBroker(dl_queues_enabled=False)
+```
+
+Keep in mind that while you may still set up redrive policies externally, some
+mechanisms like `Retries` and graceful shutdowns will not work as advertised
+anymore, as Dramatiq can't have any control over SQS `ReceiveCount`s.
+
 ## Automatic queue provisioning
 By default, in line with the behaviour of the built-in brokers, `dramatiq-sqs`
 will attempt to create all declared queues in SQS if they don't exist and set the
-queue attributes and tags. None of the attribute defaults are decided by 
-`dramatiq-sqs`, nor is setting them required for normal operation, so this is a
-purely optional customization mechanism.
+queue attributes and tags. This includes DLQs, if enabled. None of the attribute
+defaults are decided by `dramatiq-sqs`, nor is setting them required for normal
+operation, so this is a purely optional customization mechanism.
 
 ```py
 broker = SQSBroker(

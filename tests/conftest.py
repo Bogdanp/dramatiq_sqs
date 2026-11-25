@@ -10,7 +10,7 @@ from moto.server import ThreadedMotoServer
 
 from dramatiq_sqs import SQSBroker
 from dramatiq_sqs.queueset import QueueSet
-from dramatiq_sqs.sqs_queue import SQSQueueAttributes
+from dramatiq_sqs.sqs_queue import SQSQueue, SQSQueueAttributes
 
 if TYPE_CHECKING:
     from mypy_boto3_sqs import SQSClient
@@ -55,11 +55,16 @@ def tags() -> dict[str, str]:
 
 @pytest.fixture
 def dl_queues_enabled() -> bool:
-    return False
+    return True
 
 
 @pytest.fixture
 def queue_attributes() -> SQSQueueAttributes | None:
+    return None
+
+
+@pytest.fixture
+def dl_queue_attributes() -> SQSQueueAttributes | None:
     return None
 
 
@@ -69,6 +74,7 @@ def broker(
     namespace: str,
     dl_queues_enabled: bool,
     queue_attributes: SQSQueueAttributes,
+    dl_queue_attributes: SQSQueueAttributes,
     tags: dict[str, str],
 ) -> Generator[SQSBroker]:
     broker = SQSBroker(
@@ -83,6 +89,7 @@ def broker(
         ],
         dl_queues_enabled=dl_queues_enabled,
         queue_attributes=queue_attributes,
+        dl_queue_attributes=dl_queue_attributes,
         tags=tags,
     )
 
@@ -108,9 +115,20 @@ def queue_name() -> str:
 
 
 @pytest.fixture
-def queueset(broker: SQSBroker, queue_name: str) -> QueueSet:
+def queueset(broker: SQSBroker, queue_name: str) -> QueueSet[SQSQueue]:
     broker.declare_queue(queue_name)
     return broker.queuesets[queue_name]
+
+
+@pytest.fixture
+def queue(queueset: QueueSet[SQSQueue]) -> SQSQueue:
+    return queueset.queue
+
+
+@pytest.fixture
+def dl_queue(queueset: QueueSet[SQSQueue]) -> SQSQueue:
+    assert queueset.dl_queue is not None
+    return queueset.dl_queue
 
 
 @pytest.fixture

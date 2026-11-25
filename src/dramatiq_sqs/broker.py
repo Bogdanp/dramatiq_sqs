@@ -54,7 +54,7 @@ def SQSQueueSetFactory(
     *,
     manage_queues: bool = False,
     queue_attributes: SQSQueueAttributes | None = None,
-    dl_queues_enabled: bool = False,
+    dl_queues_enabled: bool = True,
     dl_queue_attributes: SQSQueueAttributes | None = None,
     tags: Tags | None = None,
 ) -> QueueSetFactory[SQSQueue]:
@@ -102,7 +102,7 @@ class SQSBroker(Broker):
         this does affect the global queue timeout, see `queue_attributes` if that is
         desired.
       dl_queues_enabled: Whether to designate matching dead letter queues for
-        unrecoverably failed messages. Defaults to False.
+        unrecoverably failed messages. Defaults to True.
       manage_queues: If True, SQS queues will be created as needed and their attributes
         adjusted to match the desired state.
       queue_attributes: Attributes to configure on the SQS queues. Only applies if
@@ -124,7 +124,7 @@ class SQSBroker(Broker):
         namespace: str | None = None,
         middleware: list[dramatiq.Middleware] | None = None,
         visibility_timeout: int | None = MAX_VISIBILITY_TIMEOUT_SECONDS,
-        dl_queues_enabled: bool = False,
+        dl_queues_enabled: bool = True,
         manage_queues: bool = True,
         queue_attributes: SQSQueueAttributes | None = None,
         dl_queue_attributes: SQSQueueAttributes | None = None,
