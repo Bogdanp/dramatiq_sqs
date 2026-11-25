@@ -15,7 +15,13 @@ from dramatiq_sqs import utils
 from dramatiq_sqs._types import Broker, Consumer
 from dramatiq_sqs.exceptions import MessageDelayTooLong, MessageTooLarge
 from dramatiq_sqs.queueset import QueueSet, QueueSetFactory, QueueSetRegistry
-from dramatiq_sqs.sqs_queue import SQSQueue, Tags, ensure_sqs_queue
+from dramatiq_sqs.sqs_queue import (
+    SQSQueue,
+    SQSQueueAttributes,
+    Tags,
+    ensure_sqs_queue,
+    get_sqs_queue,
+)
 
 if TYPE_CHECKING:
     from mypy_boto3_sqs import SQSClient
@@ -26,10 +32,6 @@ if TYPE_CHECKING:
 
 # SQS quotas:
 # https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/quotas-messages.html
-
-#: The min and max number of seconds messages may be retained for.
-MIN_MESSAGE_RETENTION_SECONDS = 60
-MAX_MESSAGE_RETENTION_SECONDS = 14 * 86400
 
 #: The maximum number of seconds SQS will wait for the message to be acked before
 #: redelivering it.
@@ -50,37 +52,29 @@ def SQSQueueSetFactory(
     sqs: "SQSClient",
     namespace: str | None = None,
     *,
-    queue_retention: int,
-    max_message_size_bytes: int | None = None,
+    manage_queues: bool = False,
+    queue_attributes: SQSQueueAttributes | None = None,
     dl_queues_enabled: bool = False,
-    dl_queue_retention: int | None = None,
+    dl_queue_attributes: SQSQueueAttributes | None = None,
     tags: Tags | None = None,
 ) -> QueueSetFactory[SQSQueue]:
+    def q_name(*parts: str) -> str:
+        return "_".join(filter(None, (namespace, *parts)))
+
+    def get_queue(name: str, attributes: SQSQueueAttributes | None) -> SQSQueue:
+        if manage_queues:
+            return ensure_sqs_queue(sqs, name, attributes, tags)
+
+        return get_sqs_queue(sqs, name)
+
     def factory(name: str) -> QueueSet[SQSQueue]:
-        common_attributes = (
-            {"MaximumMessageSize": str(max_message_size_bytes)}
-            if max_message_size_bytes is not None
-            else {}
-        )
-
-        queue_name = "_".join(filter(None, (namespace, name)))
-        queue_attributes = {
-            **common_attributes,
-            "MessageRetentionPeriod": str(queue_retention),
-        }
-        queue = ensure_sqs_queue(sqs, queue_name, queue_attributes, tags)
-
+        queue = get_queue(q_name(name), queue_attributes)
         if dl_queues_enabled:
-            dl_queue_name = "_".join(filter(None, (namespace, name, "dlq")))
-            dl_queue_attributes = {
-                **common_attributes,
-                "MessageRetentionPeriod": str(dl_queue_retention or queue_retention),
-            }
-            dl_queue = ensure_sqs_queue(sqs, dl_queue_name, dl_queue_attributes, tags)
+            dl_queue = get_queue(q_name(name, "dlq"), dl_queue_attributes)
         else:
             dl_queue = None
 
-        return QueueSet[SQSQueue](name, queue, dl_queue)
+        return QueueSet(name, queue, dl_queue)
 
     return factory
 
@@ -104,14 +98,18 @@ class SQSBroker(Broker):
         created with default boto3 configuration.
       namespace: The prefix to use when creating queues.
       middleware: The set of middleware that apply to this broker.
-      retention: The number of seconds messages will be retained for in the queue.
-        Defaults to 14 days.
-      dead_letter: Whether to add a dead-letter queue. Defaults to false.
-      dead_letter_retention: The number of seconds messages will be retained for in the
-        dead letter queue (if enabled). Defaults to 14 days.
-      max_message_size: The maximum size (in bytes) of a base64-encoded message.
-        Messages larger than this raise :class:`MessageTooLarge` on enqueue. Defaults to
-        use each queue's reported `MaximumMessageSize`).
+      visibility_timeout: VisibilityTimeout to use when fetching messages. Note that
+        this does affect the global queue timeout, see `queue_attributes` if that is
+        desired.
+      dl_queues_enabled: Whether to designate matching dead letter queues for
+        unrecoverably failed messages. Defaults to False.
+      manage_queues: If True, SQS queues will be created as needed and their attributes
+        adjusted to match the desired state.
+      queue_attributes: Attributes to configure on the SQS queues. Only applies if
+        `manage_queues`.
+      dl_queue_attributes: Attributes to configure on the dead-letter SQS queues, if
+        enabled. Only applies if `manage_queues`.
+      tags: Tags to set on the SQS queues. Only applies if `manage_queues`.
 
     .. _Dramatiq: https://dramatiq.io
     .. _Amazon SQS: https://aws.amazon.com/sqs/
@@ -125,37 +123,28 @@ class SQSBroker(Broker):
         *,
         namespace: str | None = None,
         middleware: list[dramatiq.Middleware] | None = None,
-        retention: int = MAX_MESSAGE_RETENTION_SECONDS,
-        dead_letter: bool = False,
-        dead_letter_retention: int = MAX_MESSAGE_RETENTION_SECONDS,
         visibility_timeout: int | None = MAX_VISIBILITY_TIMEOUT_SECONDS,
-        max_message_size: int | None = None,
+        dl_queues_enabled: bool = False,
+        manage_queues: bool = True,
+        queue_attributes: SQSQueueAttributes | None = None,
+        dl_queue_attributes: SQSQueueAttributes | None = None,
         tags: dict[str, str] | None = None,
     ) -> None:
-        if (
-            retention < MIN_MESSAGE_RETENTION_SECONDS
-            or retention > MAX_MESSAGE_RETENTION_SECONDS
-        ):
-            raise ValueError(
-                f"'retention' must be between {MIN_MESSAGE_RETENTION_SECONDS} seconds and "
-                f"{MAX_MESSAGE_RETENTION_SECONDS} seconds."
-            )
-
         self.client = client or boto3.client("sqs")
         self.queuesets = QueueSetRegistry[SQSQueue](
             factory=SQSQueueSetFactory(
                 self.client,
                 namespace,
-                queue_retention=retention,
-                max_message_size_bytes=max_message_size,
-                dl_queues_enabled=dead_letter,
-                dl_queue_retention=dead_letter_retention,
+                manage_queues=manage_queues,
+                queue_attributes=queue_attributes,
+                dl_queues_enabled=dl_queues_enabled,
+                dl_queue_attributes=dl_queue_attributes,
                 tags=tags,
             )
         )
-        super().__init__(middleware=middleware)
-        self.max_message_size = max_message_size
         self.visibility_timeout = visibility_timeout
+
+        super().__init__(middleware=middleware)
 
     @property
     def consumer_class(self) -> type["SQSConsumer"]:

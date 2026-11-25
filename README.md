@@ -43,24 +43,63 @@ broker = SQSBroker(
 dramatiq.set_broker(broker)
 ```
 
+## Automatic queue provisioning
+By default, in line with the behaviour of the built-in brokers, `dramatiq-sqs`
+will attempt to create all declared queues in SQS if they don't exist and set the
+queue attributes and tags. None of the attribute defaults are decided by 
+`dramatiq-sqs`, nor is setting them required for normal operation, so this is a
+purely optional customization mechanism.
 
-## Example IAM Policy
+```py
+broker = SQSBroker(
+    queue_attributes={"MaximumMessageSize": str(1024 * 1024)},
+    dl_queue_attributes={
+        "MaximumMessageSize": str(1024 * 1024),
+        "MessageRetentionPeriod": str(24 * 3600),
+    },
+    tags={"managed-by": "dramatiq"},
+)
+```
+[Supported Amazon SQS attributes](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_SetQueueAttributes.html)
 
-Here are the IAM permissions needed by Dramatiq:
+If all this is undesired (e.g. if the queues are defined statically via IaC),
+queue management may be disabled completely:
+```py
+broker = SQSBroker(manage_queues=False)
+```
 
-``` json
+## SQS IAM permissions required
+
+Below is an example of an identity-based IAM policy that allows queue usage as
+well as auto-provisioning. 
+
+```json
 {
     "Version": "2012-10-17",
     "Statement": [
         {
+            "Sid": "UseSQSQueues",
+            "Effect": "Allow",
+            "Action": [
+                "sqs:ChangeMessageVisibility",
+                "sqs:ChangeMessageVisibilityBatch",
+                "sqs:DeleteMessage",
+                "sqs:GetQueueAttributes",
+                "sqs:GetQueueUrl",
+                "sqs:PurgeQueue",
+                "sqs:ReceiveMessage",
+                "sqs:SendMessage",
+                "sqs:SendMessageBatch",
+            ],
+            "Resource": ["*"]
+        },
+        {
+            "Sid": "ManageSQSQueues",
             "Effect": "Allow",
             "Action": [
                 "sqs:CreateQueue",
-                "sqs:ReceiveMessage",
-                "sqs:DeleteMessage",
-                "sqs:DeleteMessageBatch",
-                "sqs:SendMessage",
-                "sqs:SendMessageBatch"
+                "sqs:SetQueueAttributes",
+                "sqs:TagQueue",
             ],
             "Resource": ["*"]
         }

@@ -10,6 +10,7 @@ from dramatiq import Worker
 from dramatiq_sqs import MessageTooLarge, SQSBroker
 from dramatiq_sqs.exceptions import MessageDelayTooLong
 from dramatiq_sqs.queueset import QueueSet
+from dramatiq_sqs.sqs_queue import SQSQueueAttributes
 
 if TYPE_CHECKING:
     from mypy_boto3_sqs import SQSClient
@@ -47,7 +48,7 @@ def test_failed_messages_are_deleted_from_queue(
     broker.join(queue_name)
 
 
-@pytest.mark.parametrize("dead_letter", [True])
+@pytest.mark.parametrize("dl_queues_enabled", [True])
 @pytest.mark.parametrize(("max_retries", "attempts"), [(0, 5), (3, 5)])
 def test_failed_messages_are_sent_to_dlq(
     broker: SQSBroker, worker: Worker, queue_name: str, max_retries: int, attempts: int
@@ -207,13 +208,6 @@ def test_cant_delay_messages_for_longer_than_15_seconds(
         do_work.send_with_options(delay=3600000)
 
 
-def test_retention_period_is_validated() -> None:
-    # When I attempt to instantiate a broker with an invalid retention period
-    # Then a ValueError should be raised
-    with pytest.raises(ValueError):
-        SQSBroker(retention=30 * 86400)
-
-
 def test_can_requeue_consumed_messages(broker: SQSBroker, queue_name: str) -> None:
     # Given that I have an actor
     @dramatiq.actor
@@ -278,7 +272,7 @@ def ensure_queue_trigger(
 
 
 @pytest.mark.parametrize(
-    ("queue_name", "dead_letter", "sqs_queue_names"),
+    ("queue_name", "dl_queues_enabled", "sqs_queue_names"),
     [
         ("queue42", False, ["{namespace}_queue42"]),
         ("queue42", True, ["{namespace}_queue42", "{namespace}_queue42_dlq"]),
@@ -309,8 +303,25 @@ def test_declare_queue(
 
 
 @pytest.mark.parametrize(
-    ("max_message_size_bytes"),
-    [(1024 * 1024), (256 * 1024), (128 * 1024)],
+    ("queue_attributes"),
+    [
+        {"MessageRetentionPeriod": str(24 * 3600), "VisibilityTimeout": str(42)},
+        {"MaximumMessageSize": str(512 * 1024), "DelaySeconds": str(127)},
+    ],
+)
+def test_queue_attributes_are_configurable(
+    queueset: QueueSet, queue_attributes: SQSQueueAttributes
+) -> None:
+    assert queueset.queue.attributes.items() >= queue_attributes.items()
+
+
+@pytest.mark.parametrize(
+    ("queue_attributes", "max_message_size_bytes"),
+    [
+        ({"MaximumMessageSize": str(1024 * 1024)}, 1024 * 1024),
+        ({"MaximumMessageSize": str(256 * 1024)}, 256 * 1024),
+        ({"MaximumMessageSize": str(128 * 1024)}, 128 * 1024),
+    ],
 )
 def test_maximum_message_size_is_configurable(
     queueset: QueueSet, max_message_size_bytes: int

@@ -10,6 +10,7 @@ from moto.server import ThreadedMotoServer
 
 from dramatiq_sqs import SQSBroker
 from dramatiq_sqs.queueset import QueueSet
+from dramatiq_sqs.sqs_queue import SQSQueueAttributes
 
 if TYPE_CHECKING:
     from mypy_boto3_sqs import SQSClient
@@ -53,12 +54,12 @@ def tags() -> dict[str, str]:
 
 
 @pytest.fixture
-def dead_letter() -> bool:
+def dl_queues_enabled() -> bool:
     return False
 
 
 @pytest.fixture
-def max_message_size_bytes() -> int | None:
+def queue_attributes() -> SQSQueueAttributes | None:
     return None
 
 
@@ -66,9 +67,9 @@ def max_message_size_bytes() -> int | None:
 def broker(
     client: "SQSClient",
     namespace: str,
-    dead_letter: bool,
+    dl_queues_enabled: bool,
+    queue_attributes: SQSQueueAttributes,
     tags: dict[str, str],
-    max_message_size_bytes: int | None,
 ) -> Generator[SQSBroker]:
     broker = SQSBroker(
         client,
@@ -80,8 +81,8 @@ def broker(
             Pipelines(),
             Retries(min_backoff=1, max_backoff=10, max_retries=10),
         ],
-        dead_letter=dead_letter,
-        max_message_size=max_message_size_bytes,
+        dl_queues_enabled=dl_queues_enabled,
+        queue_attributes=queue_attributes,
         tags=tags,
     )
 
