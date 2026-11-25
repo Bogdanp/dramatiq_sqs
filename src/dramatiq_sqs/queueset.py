@@ -1,6 +1,5 @@
 import sys
-from collections.abc import Callable
-from typing import Generic, TypeVar
+from typing import Generic, Protocol, TypeVar
 
 import dramatiq
 
@@ -16,10 +15,11 @@ _Q = TypeVar("_Q")
 class QueueSet(NamedTuple, Generic[_Q]):
     name: str
     queue: _Q
-    dl_queue: _Q | None
+    dl_queue: _Q | None = None
 
 
-QueueSetFactory = Callable[[str], QueueSet[_Q]]
+class QueueSetFactory(Protocol[_Q]):
+    def __call__(self, name: str) -> QueueSet[_Q]: ...
 
 
 class QueueSetRegistry(dict[str, QueueSet[_Q]]):

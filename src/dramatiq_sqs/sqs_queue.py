@@ -1,19 +1,15 @@
-from typing import TYPE_CHECKING, NamedTuple, TypedDict
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, NamedTuple
 
 import dramatiq
 
-logger = dramatiq.get_logger(__name__)
-
 if TYPE_CHECKING:
     from mypy_boto3_sqs import SQSClient
+    from mypy_boto3_sqs.literals import QueueAttributeNameType
 
+logger = dramatiq.get_logger(__name__)
 
-_SQS_QUEUE_ATTRIBUTES = {
-    "MaximumMessageSize": str,
-    "MessageRetentionPeriod": str,
-}
-
-SQSQueueAttributes = TypedDict("SQSQueueAttributes", _SQS_QUEUE_ATTRIBUTES, total=False)
+SQSQueueAttributes = Mapping["QueueAttributeNameType", str]
 Tags = dict[str, str]
 
 
@@ -28,9 +24,7 @@ class SQSQueue(NamedTuple):
 
 
 def _get_sqs_queue_attributes(sqs: "SQSClient", url: str) -> SQSQueueAttributes:
-    return sqs.get_queue_attributes(
-        QueueUrl=url, AttributeNames=list(_SQS_QUEUE_ATTRIBUTES.keys())
-    )["Attributes"]
+    return sqs.get_queue_attributes(QueueUrl=url, AttributeNames=["All"])["Attributes"]
 
 
 def _create_sqs_queue(
@@ -48,11 +42,9 @@ def _update_sqs_queue(
     if tags:
         sqs.tag_queue(QueueUrl=queue.url, Tags=tags)
 
-    attributes = attributes or {}
-
     if not attributes.items() <= queue.attributes.items():
         sqs.set_queue_attributes(QueueUrl=queue.url, Attributes=attributes)
-        queue = SQSQueue(queue.name, queue.url, queue.attributes | attributes)
+        queue = SQSQueue(queue.name, queue.url, {**queue.attributes, **attributes})
 
     return queue
 
