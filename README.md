@@ -43,6 +43,19 @@ broker = SQSBroker(
 dramatiq.set_broker(broker)
 ```
 
+## Long polling
+The consumer uses SQS long polling by default, with the maximum allowed 
+`WaitTimeSeconds` of 20. There seem to be no reasons to support values that are
+lower or zero, so this is not configurable.
+
+With a reasonably high number of worker threads, the botocore connection pool (max 10 by default) may be too small. If the overhead of no connection reuse is of concern, consider increasing the pool size. Staying above the total number of worker threads + consumer threads per process is a good rule of thumb.
+```py
+config = botocore.config.Config(max_pool_connections=64)
+client = boto3.client("sqs")
+broker = SQSBroker(client)
+```
+
+
 ## Dead-letter queues
 DLQs are enabled and used by default.
 Note that SQS-native "dead-letter queues" aka redrive policies are _not_ used.
