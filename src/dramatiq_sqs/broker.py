@@ -151,16 +151,13 @@ class SQSBroker(Broker):
         return SQSConsumer
 
     def consume(
-        self,
-        queue_name: str,
-        prefetch: int = 1,
-        timeout: int = MAX_WAIT_TIME_SECONDS * 1000,
+        self, queue_name: str, prefetch: int = 1, timeout: int = 30000
     ) -> Consumer[Any]:
         return SQSConsumer(
             self.client,
             self.queuesets[queue_name].queue,
             prefetch,
-            timeout,
+            idle_timeout_ms=timeout,
             dl_queue=self.queuesets[queue_name].dl_queue,
             visibility_timeout=self.visibility_timeout,
         )
@@ -269,7 +266,7 @@ class SQSConsumer(Consumer[_SQSMessage]):
         client: "SQSClient",
         queue: SQSQueue,
         prefetch: int,
-        timeout: int,
+        idle_timeout_ms: int,
         *,
         dl_queue: SQSQueue | None,
         visibility_timeout: int | None = None,
@@ -290,13 +287,7 @@ class SQSConsumer(Consumer[_SQSMessage]):
                 f"the maximum supported ({MAX_VISIBILITY_TIMEOUT_SECONDS})."
             )
 
-        self.wait_time_seconds = timeout // 1000
-
-        if self.wait_time_seconds > MAX_WAIT_TIME_SECONDS:
-            raise ValueError(
-                f"The consumer timeout of {self.wait_time_seconds} is higher than "
-                f"the maximum supported ({MAX_WAIT_TIME_SECONDS})."
-            )
+        self.idle_timeout_ms = idle_timeout_ms
 
         self.prefetch_limit = prefetch
         if self.prefetch_limit > MAX_PREFETCH:
@@ -371,7 +362,7 @@ class SQSConsumer(Consumer[_SQSMessage]):
         sqs_messages = receive_message(
             QueueUrl=self.queue.url,
             MaxNumberOfMessages=max_number,
-            WaitTimeSeconds=self.wait_time_seconds,
+            WaitTimeSeconds=MAX_WAIT_TIME_SECONDS,
         ).get("Messages", [])
 
         for sqs_message in sqs_messages:
@@ -394,7 +385,7 @@ class SQSConsumer(Consumer[_SQSMessage]):
             # in this case we stall for up ``wait_time_seconds`` to not waste CPU.
             if self.prefetch_total >= self.prefetch_limit:
                 self.prefetch_backoffs, backoff_ms = compute_backoff(
-                    self.prefetch_backoffs, max_backoff=self.wait_time_seconds * 1000
+                    self.prefetch_backoffs, max_backoff=self.idle_timeout_ms
                 )
                 time.sleep(backoff_ms / 1000)
                 return None
